@@ -9,7 +9,6 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any
 
 
-
 DB_PATH = os.path.join(os.path.dirname(__file__), 'driver_monitor.db')
 
 
@@ -128,6 +127,13 @@ class Database:
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT id, username, email FROM users WHERE role IN ('admin','superadmin') AND is_approved=1"
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_superadmins(self) -> List[Dict]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id, username, email FROM users WHERE role='superadmin' AND is_approved=1"
             ).fetchall()
             return [dict(r) for r in rows]
 

@@ -1,25 +1,26 @@
 // lib/screens/detection.dart
 // Real-time driver monitoring using Google ML Kit Face Detection
- 
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:vibration/vibration.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import '../services/api_service.dart';
- 
+
 // ── Alert data ─────────────────────────────────────────────────────────────────
- 
+
 class AlertInfo {
   final String type;
   final Color color;
   final IconData icon;
   AlertInfo(this.type, this.color, this.icon);
 }
- 
+
 final Map<String, AlertInfo> alertMap = {
   'Drowsiness Detected': AlertInfo(
       'Drowsiness Detected', const Color(0xFFFF9500), Icons.bedtime),
@@ -32,25 +33,25 @@ final Map<String, AlertInfo> alertMap = {
   'No Driver Detected': AlertInfo(
       'No Driver Detected', const Color(0xFFAF52DE), Icons.no_accounts),
 };
- 
+
 // ── Detection thresholds ───────────────────────────────────────────────────────
- 
+
 const double _earThreshold       = 0.22; // below = eyes closed
 const int    _earConsecFrames    = 15;   // frames before drowsiness alert
 const double _yawThreshold       = 25.0; // degrees head turn = distracted
 const double _pitchDownThreshold = -20.0;// degrees chin down = head drop
 const int    _noFaceFrames       = 20;   // frames without face = no driver
 const int    _cooldownSeconds    = 5;    // seconds between same alert type
- 
+
 // ── Screen ─────────────────────────────────────────────────────────────────────
- 
+
 class DetectionScreen extends StatefulWidget {
   const DetectionScreen({super.key});
- 
+
   @override
   State<DetectionScreen> createState() => _DetectionScreenState();
 }
- 
+
 class _DetectionScreenState extends State<DetectionScreen>
     with TickerProviderStateMixin {
   // ── State ──────────────────────────────────────────────────────────────────
@@ -63,34 +64,34 @@ class _DetectionScreenState extends State<DetectionScreen>
   Timer?  _alertClearTimer;
   int _frameCount   = 0;
   int _totalAlerts  = 0;
- 
+
   // ── ML Kit ─────────────────────────────────────────────────────────────────
   late final FaceDetector _faceDetector;
- 
+
   // ── Detection counters ─────────────────────────────────────────────────────
   int _earCounter    = 0;
   int _noFaceCounter = 0;
   final Map<String, DateTime> _alertCooldown = {};
- 
+
   // ── Metrics display ────────────────────────────────────────────────────────
   double? _lastEar;
   double? _lastYaw;
   double? _lastPitch;
   int     _facesDetected = 0;
- 
+
   // ── Audio ──────────────────────────────────────────────────────────────────
   final AudioPlayer _audio = AudioPlayer();
- 
+
   // ── Animations ────────────────────────────────────────────────────────────
   late AnimationController _pulseCtrl;
   late Animation<double>   _pulseAnim;
   late AnimationController _alertCtrl;
   late Animation<double>   _alertAnim;
- 
+
   @override
   void initState() {
     super.initState();
- 
+
     // ML Kit face detector — request landmarks + classifications
     _faceDetector = FaceDetector(
       options: FaceDetectorOptions(
@@ -102,25 +103,25 @@ class _DetectionScreenState extends State<DetectionScreen>
         minFaceSize:           0.15,
       ),
     );
- 
+
     _pulseCtrl = AnimationController(
         vsync: this, duration: const Duration(seconds: 2))
       ..repeat(reverse: true);
     _pulseAnim = Tween<double>(begin: 0.95, end: 1.0).animate(
         CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut));
- 
+
     _alertCtrl = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 400));
     _alertAnim =
         CurvedAnimation(parent: _alertCtrl, curve: Curves.elasticOut);
- 
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final args = ModalRoute.of(context)?.settings.arguments;
       if (args is Map<String, dynamic>) setState(() => _user = args);
       _initCamera();
     });
   }
- 
+
   @override
   void dispose() {
     _alertClearTimer?.cancel();
@@ -131,40 +132,40 @@ class _DetectionScreenState extends State<DetectionScreen>
     _alertCtrl.dispose();
     super.dispose();
   }
- 
+
   // ── Camera init ────────────────────────────────────────────────────────────
- 
+
   Future<void> _initCamera() async {
     try {
       final cameras = await availableCameras();
       if (cameras.isEmpty) return;
- 
+
       final front = cameras.firstWhere(
         (c) => c.lensDirection == CameraLensDirection.front,
         orElse: () => cameras.first,
       );
- 
+
       _camera = CameraController(
         front,
         ResolutionPreset.medium,
         enableAudio: false,
         imageFormatGroup: ImageFormatGroup.nv21, // required for ML Kit on Android
       );
- 
+
       await _camera!.initialize();
       if (mounted) setState(() => _cameraReady = true);
     } catch (e) {
       debugPrint('Camera init error: $e');
     }
   }
- 
+
   // ── Detection loop ─────────────────────────────────────────────────────────
- 
+
   void _startDetection() {
     setState(() => _detecting = true);
     _camera?.startImageStream(_onCameraImage);
   }
- 
+
   void _stopDetection() {
     _camera?.stopImageStream();
     _alertClearTimer?.cancel();
@@ -179,25 +180,25 @@ class _DetectionScreenState extends State<DetectionScreen>
       _facesDetected  = 0;
     });
   }
- 
+
   // Called for every camera frame
   Future<void> _onCameraImage(CameraImage image) async {
     if (_processing) return; // skip frame if still processing previous
     _processing = true;
     _frameCount++;
- 
+
     try {
       // Convert CameraImage to ML Kit InputImage
       final inputImage = _buildInputImage(image);
       if (inputImage == null) { _processing = false; return; }
- 
+
       // Run face detection
       final faces = await _faceDetector.processImage(inputImage);
- 
+
       if (!mounted) { _processing = false; return; }
- 
+
       setState(() => _facesDetected = faces.length);
- 
+
       if (faces.isEmpty) {
         // No face in frame
         _earCounter = 0;
@@ -213,20 +214,20 @@ class _DetectionScreenState extends State<DetectionScreen>
     } catch (e) {
       debugPrint('Detection error: $e');
     }
- 
+
     _processing = false;
   }
- 
+
   // Convert CameraImage (YUV/NV21) → InputImage for ML Kit
   InputImage? _buildInputImage(CameraImage image) {
     try {
       final camera = _camera!.description;
       final rotation = InputImageRotationValue.fromRawValue(
           camera.sensorOrientation) ?? InputImageRotation.rotation0deg;
- 
+
       final format = InputImageFormatValue.fromRawValue(image.format.raw);
       if (format == null) return null;
- 
+
       // For NV21 (Android) — single plane
       if (image.planes.length == 1) {
         return InputImage.fromBytes(
@@ -239,13 +240,15 @@ class _DetectionScreenState extends State<DetectionScreen>
           ),
         );
       }
- 
+
       // For multi-plane (YUV420) — concatenate planes
-      final allBytes = image.planes
-          .map((p) => p.bytes)
-          .reduce((a, b) => [...a, ...b]);
+      final List<int> combined = [];
+      for (final plane in image.planes) {
+        combined.addAll(plane.bytes);
+      }
+      final allBytes = Uint8List.fromList(combined);
       return InputImage.fromBytes(
-        bytes: Uint8List.fromList(allBytes),
+        bytes: allBytes,
         metadata: InputImageMetadata(
           size: Size(image.width.toDouble(), image.height.toDouble()),
           rotation: rotation,
@@ -257,20 +260,20 @@ class _DetectionScreenState extends State<DetectionScreen>
       return null;
     }
   }
- 
+
   // Analyze detected face for drowsiness, distraction, head drop
   Future<void> _analyzeFace(Face face) async {
     // ── Eye openness (ML Kit gives probability 0.0–1.0) ───────────────────
     final leftEyeOpen  = face.leftEyeOpenProbability  ?? 1.0;
     final rightEyeOpen = face.rightEyeOpenProbability ?? 1.0;
     final avgEyeOpen   = (leftEyeOpen + rightEyeOpen) / 2.0;
- 
+
     // Convert to EAR-like value (invert: 0=closed, 1=open)
     // EAR threshold 0.22 mapped: eye open prob < 0.35 ≈ closed
     final eyeClosed = avgEyeOpen < 0.35;
- 
+
     setState(() => _lastEar = avgEyeOpen);
- 
+
     if (eyeClosed) {
       _earCounter++;
       if (_earCounter >= _earConsecFrames) {
@@ -280,60 +283,60 @@ class _DetectionScreenState extends State<DetectionScreen>
     } else {
       _earCounter = 0;
     }
- 
+
     // ── Head pose (Euler angles in degrees) ───────────────────────────────
     final yaw   = face.headEulerAngleY ?? 0.0; // left/right
     final pitch = face.headEulerAngleX ?? 0.0; // up/down
     // final roll = face.headEulerAngleZ ?? 0.0; // tilt
- 
+
     setState(() {
       _lastYaw   = yaw;
       _lastPitch = pitch;
     });
- 
+
     // Distraction: head turned sideways
     if (yaw.abs() > _yawThreshold) {
       await _triggerAlert('Driver Distracted');
       return;
     }
- 
+
     // Head drop: chin toward chest
     if (pitch < _pitchDownThreshold) {
       await _triggerAlert('Head Drop Detected');
       return;
     }
   }
- 
+
   // ── Alert handling ─────────────────────────────────────────────────────────
- 
+
   bool _cooldownOk(String alertType) {
     final last = _alertCooldown[alertType];
     if (last == null) return true;
     return DateTime.now().difference(last).inSeconds >= _cooldownSeconds;
   }
- 
+
   Future<void> _triggerAlert(String alertType) async {
     if (_currentAlert != null) return;
     if (!_cooldownOk(alertType)) return;
     if (!mounted) return;
- 
+
     _alertCooldown[alertType] = DateTime.now();
- 
+
     setState(() {
       _currentAlert = alertType;
       _totalAlerts++;
     });
     _alertCtrl.forward(from: 0);
- 
+
     // Sound + vibration
     await _playAlarm();
     await _vibrate();
- 
+
     // Log to backend + capture screenshot
     final username  = _user?['username'] ?? 'unknown';
     final timestamp = DateTime.now().toIso8601String();
     String? screenshot;
- 
+
     try {
       // Temporarily stop stream to take picture
       await _camera?.stopImageStream();
@@ -347,47 +350,51 @@ class _DetectionScreenState extends State<DetectionScreen>
       // Resume stream even if screenshot fails
       if (_detecting) _camera?.startImageStream(_onCameraImage);
     }
- 
+
     ApiService.logAlert(
       username:         username,
       alertType:        alertType,
       timestamp:        timestamp,
       screenshotBase64: screenshot,
     );
- 
+
     // Auto-clear after 4 seconds
     _alertClearTimer?.cancel();
     _alertClearTimer = Timer(const Duration(seconds: 4), () {
       if (mounted) setState(() => _currentAlert = null);
     });
   }
- 
+
   Future<void> _playAlarm() async {
     try {
       await _audio.stop();
+      await _audio.setVolume(1.0);
+      await _audio.setReleaseMode(ReleaseMode.stop);
       await _audio.play(AssetSource('alarm.mp3'));
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Audio error: $e');
+    }
   }
- 
+
   Future<void> _vibrate() async {
     try {
       final has = await Vibration.hasVibrator() ?? false;
       if (has) Vibration.vibrate(pattern: [0, 300, 100, 300, 100, 500]);
     } catch (_) {}
   }
- 
+
   Future<void> _logout() async {
     if (_detecting) _stopDetection();
     await ApiService.clearSession();
     if (mounted) Navigator.pushReplacementNamed(context, '/login');
   }
- 
+
   // ── UI ──────────────────────────────────────────────────────────────────────
- 
+
   @override
   Widget build(BuildContext context) {
     final alertInfo = _currentAlert != null ? alertMap[_currentAlert!] : null;
- 
+
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
@@ -397,7 +404,7 @@ class _DetectionScreenState extends State<DetectionScreen>
             Positioned.fill(child: CameraPreview(_camera!))
           else
             const Positioned.fill(child: _CameraPlaceholder()),
- 
+
           // Alert colour wash
           if (_currentAlert != null)
             Positioned.fill(
@@ -407,14 +414,14 @@ class _DetectionScreenState extends State<DetectionScreen>
                     color: (alertInfo?.color ?? Colors.red).withOpacity(0.25)),
               ),
             ),
- 
+
           // Top bar
           Positioned(top: 0, left: 0, right: 0, child: _buildTopBar()),
- 
+
           // Metrics band
           Positioned(
               bottom: 140, left: 0, right: 0, child: _buildMetricsBand()),
- 
+
           // Alert banner
           if (_currentAlert != null)
             Positioned(
@@ -425,7 +432,7 @@ class _DetectionScreenState extends State<DetectionScreen>
                   scale: _alertAnim,
                   child: _buildAlertBanner(alertInfo)),
             ),
- 
+
           // Bottom controls
           Positioned(
               bottom: 0, left: 0, right: 0, child: _buildBottomControls()),
@@ -433,7 +440,7 @@ class _DetectionScreenState extends State<DetectionScreen>
       ),
     );
   }
- 
+
   Widget _buildTopBar() {
     return Container(
       padding: EdgeInsets.fromLTRB(
@@ -500,7 +507,7 @@ class _DetectionScreenState extends State<DetectionScreen>
       ]),
     );
   }
- 
+
   Widget _buildAlertBanner(AlertInfo? info) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
@@ -540,7 +547,7 @@ class _DetectionScreenState extends State<DetectionScreen>
       ]),
     );
   }
- 
+
   Widget _buildMetricsBand() {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -580,7 +587,7 @@ class _DetectionScreenState extends State<DetectionScreen>
       ),
     );
   }
- 
+
   Widget _metricItem(String label, String value, Color valueColor) {
     return Column(children: [
       Text(label,
@@ -594,10 +601,10 @@ class _DetectionScreenState extends State<DetectionScreen>
               fontWeight: FontWeight.bold)),
     ]);
   }
- 
+
   Widget _divider() =>
       Container(width: 1, height: 28, color: Colors.white12);
- 
+
   Widget _buildBottomControls() {
     return Container(
       padding: EdgeInsets.fromLTRB(
@@ -664,12 +671,12 @@ class _DetectionScreenState extends State<DetectionScreen>
     );
   }
 }
- 
+
 // ── Camera placeholder ─────────────────────────────────────────────────────────
- 
+
 class _CameraPlaceholder extends StatelessWidget {
   const _CameraPlaceholder();
- 
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -686,4 +693,3 @@ class _CameraPlaceholder extends StatelessWidget {
     );
   }
 }
- 

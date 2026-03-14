@@ -8,11 +8,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiService {
   // ── Change this to your server IP/hostname ─────────────────────────────────
-  static const String baseUrl = 'http://10.48.29.137:5000/api';
+  static const String baseUrl = 'https://driver-monitoring-system-nkw7.onrender.com/api';
   // Use 10.0.2.2 for Android emulator → localhost
   // Use your machine's IP for physical devices (e.g. http://192.168.1.100:5000/api)
 
-  static const Duration _timeout = Duration(seconds: 15);
+  static const Duration _timeout = Duration(seconds: 60);
 
   // ── Stored session ─────────────────────────────────────────────────────────
 

@@ -59,12 +59,20 @@ def register():
     if db.get_user_by_email(email):
         return jsonify({'success': False, 'message': 'Email already registered'}), 409
 
-    # Users are auto-approved; admins need Super Admin approval
-    is_approved = 1 if role in ['user', 'superadmin'] else 0
+    # Only regular users are auto-approved
+    # Admins and new superadmins need approval from existing superadmin
+    is_approved = 1 if role == 'user' else 0
 
     user_id = db.create_user(username, email, password, role, is_approved)
     if user_id:
         msg = 'Registration successful' if is_approved else 'Registration submitted. Awaiting Super Admin approval.'
+        # Notify all superadmins about new admin/superadmin registration
+        if role in ['admin', 'superadmin']:
+            superadmins = db.get_superadmins()
+            for sa in superadmins:
+                email_service.send_registration_alert_to_superadmin(
+                    sa['email'], username, role
+                )
         return jsonify({'success': True, 'message': msg, 'user_id': user_id}), 201
     return jsonify({'success': False, 'message': 'Registration failed'}), 500
 
