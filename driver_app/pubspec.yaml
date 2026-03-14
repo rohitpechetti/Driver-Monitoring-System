@@ -18,6 +18,9 @@ dependencies:
   # Camera
   camera: ^0.10.5+9
 
+  # Real AI Detection
+  google_mlkit_face_detection: ^0.11.0
+
   # Alerts
   audioplayers: ^6.0.0
   vibration: ^2.0.0
@@ -48,3 +51,4 @@ flutter:
   uses-material-design: true
   assets:
     - assets/
+

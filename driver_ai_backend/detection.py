@@ -3,7 +3,7 @@ AI Detection Engine — compatible with MediaPipe 0.10+ (Tasks API)
 and falls back gracefully if MediaPipe or YOLOv8 are not installed.
 """
 
-import cv2
+"""import cv2
 import numpy as np
 import time
 import base64
@@ -252,4 +252,17 @@ class DetectionEngine:
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
         cap.release()
-        cv2.destroyAllWindows()
+        cv2.destroyAllWindows()"""
+
+
+"""
+Detection Engine - server stub.
+AI detection runs on the mobile app via ML Kit.
+"""
+
+class DetectionEngine:
+    def __init__(self, *args, **kwargs):
+        print("[Detection] Server mode - AI runs on mobile app")
+
+    def analyze_frame(self, frame):
+        return {"alert": False, "alert_type": None, "metrics": {}}
