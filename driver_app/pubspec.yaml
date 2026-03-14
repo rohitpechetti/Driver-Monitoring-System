@@ -1,0 +1,50 @@
+name: driver_app
+description: AI-Powered Driver Monitoring System
+
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # HTTP
+  http: ^1.2.0
+  dio: ^5.4.0
+
+  # Camera
+  camera: ^0.10.5+9
+
+  # Alerts
+  audioplayers: ^6.0.0
+  vibration: ^2.0.0
+
+  # Storage
+  shared_preferences: ^2.2.3
+  path_provider: ^2.1.2
+
+  # PDF & CSV
+  pdf: ^3.11.0
+  csv: ^6.0.0
+
+  # Image handling
+  image: ^4.1.7
+
+  # Icons & UI
+  cupertino_icons: ^1.0.6
+  flutter_spinkit: ^5.2.1
+  fl_chart: ^0.68.0
+  intl: ^0.19.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/

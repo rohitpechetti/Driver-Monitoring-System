@@ -1,0 +1,16 @@
+venv/
+__pycache__/
+*.pyc
+*.pyd
+*.dll
+*.db
+screenshots/
+.env
+models/
+*.pt
+*.task
+node_modules/
+.dart_tool/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies

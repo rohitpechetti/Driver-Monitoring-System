@@ -1,0 +1,11 @@
+venv/ 
+__pycache__/ 
+*.pyc 
+*.pyd 
+*.dll 
+*.db 
+.env 
+models/ 
+screenshots/ 
+build/ 
+.dart_tool/ 
