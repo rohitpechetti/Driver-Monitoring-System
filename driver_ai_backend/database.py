@@ -119,7 +119,7 @@ class Database:
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT id, username, email, role, created_at FROM users "
-                "WHERE role='admin' AND is_approved=0 ORDER BY created_at DESC"
+                "WHERE role IN ('admin','superadmin') AND is_approved=0 ORDER BY created_at DESC"
             ).fetchall()
             return [dict(r) for r in rows]
 
@@ -211,3 +211,4 @@ class Database:
                 'recent_logs': recent_logs,
                 'top_drivers': top_drivers
             }
+

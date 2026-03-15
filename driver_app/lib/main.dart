@@ -10,6 +10,13 @@ import 'services/api_service.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Catch Flutter framework errors — prevent full app crash
+  FlutterError.onError = (FlutterErrorDetails details) {
+    debugPrint('Flutter error caught: ${details.exception}');
+    debugPrint('${details.stack}');
+  };
+
   SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,

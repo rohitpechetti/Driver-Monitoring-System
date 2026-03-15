@@ -326,43 +326,67 @@ class _DetectionScreenState extends State<DetectionScreen>
       _currentAlert = alertType;
       _totalAlerts++;
     });
+
     _alertCtrl.forward(from: 0);
 
-    // Sound + vibration
-    await _playAlarm();
-    await _vibrate();
+    // Sound + vibration simultaneously
+    _playAlarm();
+    _vibrate();
 
-    // Log to backend + capture screenshot
+    // Log to backend (fire and forget — don't await to avoid blocking UI)
     final username  = _user?['username'] ?? 'unknown';
     final timestamp = DateTime.now().toIso8601String();
-    String? screenshot;
 
-    try {
-      // Temporarily stop stream to take picture
-      await _camera?.stopImageStream();
-      final xFile = await _camera?.takePicture();
-      if (_detecting) _camera?.startImageStream(_onCameraImage);
-      if (xFile != null) {
-        final bytes = await xFile.readAsBytes();
-        screenshot = 'data:image/jpeg;base64,${base64Encode(bytes)}';
-      }
-    } catch (_) {
-      // Resume stream even if screenshot fails
-      if (_detecting) _camera?.startImageStream(_onCameraImage);
-    }
-
-    ApiService.logAlert(
-      username:         username,
-      alertType:        alertType,
-      timestamp:        timestamp,
-      screenshotBase64: screenshot,
-    );
+    // Capture screenshot safely without stopping detection stream
+    _captureAndLog(username, alertType, timestamp);
 
     // Auto-clear after 4 seconds
     _alertClearTimer?.cancel();
     _alertClearTimer = Timer(const Duration(seconds: 4), () {
       if (mounted) setState(() => _currentAlert = null);
     });
+  }
+
+  // Separate method to safely capture screenshot without crashing
+  Future<void> _captureAndLog(
+      String username, String alertType, String timestamp) async {
+    String? screenshot;
+    try {
+      if (_camera != null && _camera!.value.isInitialized) {
+        // Stop stream safely
+        try { await _camera!.stopImageStream(); } catch (_) {}
+        await Future.delayed(const Duration(milliseconds: 200));
+
+        // Take picture
+        try {
+          final xFile = await _camera!.takePicture();
+          final bytes = await xFile.readAsBytes();
+          screenshot = 'data:image/jpeg;base64,${base64Encode(bytes)}';
+        } catch (e) {
+          debugPrint('Screenshot error: $e');
+        }
+
+        // Restart stream if still detecting
+        await Future.delayed(const Duration(milliseconds: 200));
+        if (_detecting && mounted) {
+          try { await _camera!.startImageStream(_onCameraImage); } catch (_) {}
+        }
+      }
+    } catch (e) {
+      debugPrint('Capture error: $e');
+      // Always try to restart stream
+      if (_detecting && mounted) {
+        try { await _camera?.startImageStream(_onCameraImage); } catch (_) {}
+      }
+    }
+
+    // Log to backend regardless of screenshot success
+    ApiService.logAlert(
+      username:         username,
+      alertType:        alertType,
+      timestamp:        timestamp,
+      screenshotBase64: screenshot,
+    );
   }
 
   Future<void> _playAlarm() async {

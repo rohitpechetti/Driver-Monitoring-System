@@ -62,9 +62,11 @@ class _SuperAdminPanelState extends State<SuperAdminPanel>
     }
   }
 
-  Future<void> _approveAdmin(int userId, String username) async {
+  Future<void> _approveAdmin(int userId, String username, String role) async {
     final confirmed = await _confirm(
-        'Approve Admin', 'Approve $username as Admin?', Colors.green);
+        'Approve ${role == 'superadmin' ? 'Super Admin' : 'Admin'}',
+        'Approve $username as ${role == 'superadmin' ? 'Super Admin' : 'Admin'}?',
+        Colors.green);
     if (!confirmed) return;
 
     final result = await ApiService.approveAdmin(userId);
@@ -259,13 +261,19 @@ class _SuperAdminPanelState extends State<SuperAdminPanel>
   }
 
   Widget _buildPendingCard(Map<String, dynamic> admin) {
+    final role = admin['role'] as String? ?? 'admin';
+    final isSuperAdmin = role == 'superadmin';
+    final roleColor = isSuperAdmin ? const Color(0xFFAF52DE) : Colors.amber;
+    final roleLabel = isSuperAdmin ? 'SUPER ADMIN' : 'ADMIN';
+    final roleIcon = isSuperAdmin ? Icons.security : Icons.admin_panel_settings;
+
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: const Color(0xFF0F1E35),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.amber.withOpacity(0.3)),
+        border: Border.all(color: roleColor.withOpacity(0.4)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -275,11 +283,10 @@ class _SuperAdminPanelState extends State<SuperAdminPanel>
               Container(
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: Colors.amber.withOpacity(0.15),
+                  color: roleColor.withOpacity(0.15),
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child: const Icon(Icons.admin_panel_settings,
-                    color: Colors.amber, size: 24),
+                child: Icon(roleIcon, color: roleColor, size: 24),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -294,6 +301,20 @@ class _SuperAdminPanelState extends State<SuperAdminPanel>
                     Text(admin['email'] ?? '',
                         style: const TextStyle(
                             color: Colors.white54, fontSize: 12)),
+                    const SizedBox(height: 4),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: roleColor.withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(roleLabel,
+                          style: TextStyle(
+                              color: roleColor,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold)),
+                    ),
                   ],
                 ),
               ),
@@ -301,13 +322,13 @@ class _SuperAdminPanelState extends State<SuperAdminPanel>
                 padding: const EdgeInsets.symmetric(
                     horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  color: Colors.amber.withOpacity(0.1),
+                  color: Colors.orange.withOpacity(0.1),
                   borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.amber.withOpacity(0.4)),
+                  border: Border.all(color: Colors.orange.withOpacity(0.4)),
                 ),
                 child: const Text('PENDING',
                     style: TextStyle(
-                        color: Colors.amber,
+                        color: Colors.orange,
                         fontSize: 10,
                         fontWeight: FontWeight.bold)),
               ),
@@ -333,8 +354,8 @@ class _SuperAdminPanelState extends State<SuperAdminPanel>
               const SizedBox(width: 10),
               Expanded(
                 child: ElevatedButton.icon(
-                  onPressed: () =>
-                      _approveAdmin(admin['id'], admin['username'] ?? ''),
+                  onPressed: () => _approveAdmin(
+                      admin['id'], admin['username'] ?? '', role),
                   icon: const Icon(Icons.check, size: 16),
                   label: const Text('APPROVE'),
                   style: ElevatedButton.styleFrom(
