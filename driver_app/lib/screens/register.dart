@@ -1,4 +1,5 @@
 // lib/screens/register.dart
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 
@@ -12,17 +13,28 @@ class RegisterScreen extends StatefulWidget {
 class _RegisterScreenState extends State<RegisterScreen> {
   final _formKey = GlobalKey<FormState>();
   final _usernameCtrl = TextEditingController();
-  final _emailCtrl = TextEditingController();
+  final _emailCtrl    = TextEditingController();
   final _passwordCtrl = TextEditingController();
-  final _confirmCtrl = TextEditingController();
+  final _confirmCtrl  = TextEditingController();
   String _selectedRole = 'user';
-  bool _loading = false;
-  bool _obscure = true;
+  bool   _loading  = false;
+  bool   _obscure  = true;
+  String _loadingMsg = 'Creating account...';
+  Timer? _msgTimer;
+  int    _msgIndex = 0;
+
+  final List<String> _loadingMessages = [
+    'Creating account...',
+    'Connecting to server...',
+    'Server is waking up, please wait...',
+    'Almost there...',
+    'Still connecting...',
+  ];
 
   final List<Map<String, dynamic>> _roles = [
-    {'value': 'user', 'label': 'Driver / User', 'icon': Icons.drive_eta},
-    {'value': 'admin', 'label': 'Admin', 'icon': Icons.admin_panel_settings},
-    {'value': 'superadmin', 'label': 'Super Admin', 'icon': Icons.security},
+    {'value': 'user',       'label': 'Driver / User', 'icon': Icons.drive_eta},
+    {'value': 'admin',      'label': 'Admin',         'icon': Icons.admin_panel_settings},
+    {'value': 'superadmin', 'label': 'Super Admin',   'icon': Icons.security},
   ];
 
   @override
@@ -31,20 +43,41 @@ class _RegisterScreenState extends State<RegisterScreen> {
     _emailCtrl.dispose();
     _passwordCtrl.dispose();
     _confirmCtrl.dispose();
+    _msgTimer?.cancel();
     super.dispose();
+  }
+
+  void _startLoadingMessages() {
+    _msgIndex  = 0;
+    _loadingMsg = _loadingMessages[0];
+    _msgTimer = Timer.periodic(const Duration(seconds: 8), (t) {
+      if (!mounted) { t.cancel(); return; }
+      _msgIndex = (_msgIndex + 1) % _loadingMessages.length;
+      setState(() => _loadingMsg = _loadingMessages[_msgIndex]);
+    });
+  }
+
+  void _stopLoadingMessages() {
+    _msgTimer?.cancel();
+    _msgTimer = null;
   }
 
   Future<void> _register() async {
     if (!_formKey.currentState!.validate()) return;
-    setState(() => _loading = true);
+    setState(() {
+      _loading    = true;
+      _loadingMsg = _loadingMessages[0];
+    });
+    _startLoadingMessages();
 
     final result = await ApiService.register(
       username: _usernameCtrl.text.trim(),
-      email: _emailCtrl.text.trim(),
+      email:    _emailCtrl.text.trim(),
       password: _passwordCtrl.text,
-      role: _selectedRole,
+      role:     _selectedRole,
     );
 
+    _stopLoadingMessages();
     if (!mounted) return;
     setState(() => _loading = false);
 
@@ -172,20 +205,47 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           );
                         }).toList(),
                       ),
-                      if (_selectedRole == 'admin')
+                      if (_selectedRole == 'admin' || _selectedRole == 'superadmin')
                         Padding(
                           padding: const EdgeInsets.only(top: 8),
-                          child: Row(
-                            children: const [
-                              Icon(Icons.info_outline, size: 14, color: Colors.amber),
-                              SizedBox(width: 6),
-                              Expanded(
-                                child: Text(
-                                  'Admin accounts require Super Admin approval',
-                                  style: TextStyle(color: Colors.amber, fontSize: 12),
-                                ),
+                          child: Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: _selectedRole == 'superadmin'
+                                  ? const Color(0xFFAF52DE).withOpacity(0.1)
+                                  : Colors.amber.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: _selectedRole == 'superadmin'
+                                    ? const Color(0xFFAF52DE).withOpacity(0.4)
+                                    : Colors.amber.withOpacity(0.4),
                               ),
-                            ],
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.info_outline,
+                                  size: 16,
+                                  color: _selectedRole == 'superadmin'
+                                      ? const Color(0xFFAF52DE)
+                                      : Colors.amber,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    _selectedRole == 'superadmin'
+                                        ? 'Super Admin accounts require approval from the default Super Admin (superadmin)'
+                                        : 'Admin accounts require Super Admin approval before login',
+                                    style: TextStyle(
+                                      color: _selectedRole == 'superadmin'
+                                          ? const Color(0xFFAF52DE)
+                                          : Colors.amber,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                       const SizedBox(height: 20),
@@ -273,6 +333,43 @@ class _RegisterScreenState extends State<RegisterScreen> {
                               : const Text('CREATE ACCOUNT'),
                         ),
                       ),
+
+                      // Loading message
+                      if (_loading) ...[
+                        const SizedBox(height: 16),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF00D4FF).withOpacity(0.08),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(
+                              color: const Color(0xFF00D4FF).withOpacity(0.3),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              const SizedBox(
+                                width: 14, height: 14,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Color(0xFF00D4FF),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Flexible(
+                                child: Text(
+                                  _loadingMsg,
+                                  style: const TextStyle(
+                                    color: Color(0xFF00D4FF),
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),

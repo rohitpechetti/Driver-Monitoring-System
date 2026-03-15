@@ -390,20 +390,41 @@ class _DetectionScreenState extends State<DetectionScreen>
   }
 
   Future<void> _playAlarm() async {
+    bool played = false;
+    // Try asset sound first
     try {
       await _audio.stop();
       await _audio.setVolume(1.0);
       await _audio.setReleaseMode(ReleaseMode.stop);
       await _audio.play(AssetSource('alarm.mp3'));
+      played = true;
+      debugPrint('Audio: playing from asset');
     } catch (e) {
-      debugPrint('Audio error: $e');
+      debugPrint('Audio asset failed: $e');
+    }
+    // Fallback: stronger vibration if sound fails
+    if (!played) {
+      try {
+        final has = await Vibration.hasVibrator() ?? false;
+        if (has) {
+          Vibration.vibrate(
+            pattern: [0, 800, 200, 800, 200, 1000],
+            intensities: [0, 255, 0, 255, 0, 255],
+          );
+        }
+      } catch (_) {}
     }
   }
 
   Future<void> _vibrate() async {
     try {
       final has = await Vibration.hasVibrator() ?? false;
-      if (has) Vibration.vibrate(pattern: [0, 300, 100, 300, 100, 500]);
+      if (has) {
+        Vibration.vibrate(
+          pattern: [0, 300, 100, 300, 100, 500],
+          intensities: [0, 128, 0, 200, 0, 255],
+        );
+      }
     } catch (_) {}
   }
 

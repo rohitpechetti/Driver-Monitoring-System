@@ -173,19 +173,24 @@ def log_alert():
 
     log_id = db.create_log(username, alert_type, timestamp, screenshot_path)
 
-    # Notify admins/superadmins via email
-    admins = db.get_approved_admins()
-    user_data = db.get_user_by_username(username)
-    user_email = user_data['email'] if user_data else None
+    # Send email alerts in background thread so it doesn't block response
+    import threading
+    def send_emails():
+        try:
+            admins = db.get_approved_admins()
+            print(f"[Alert] Sending emails to {len(admins)} admins for: {alert_type}")
+            for admin in admins:
+                email_service.send_alert_email(
+                    to_email=admin['email'],
+                    driver_name=username,
+                    alert_type=alert_type,
+                    timestamp=timestamp,
+                    screenshot_path=screenshot_path
+                )
+        except Exception as e:
+            print(f"[Alert] Email thread error: {e}")
 
-    for admin in admins:
-        email_service.send_alert_email(
-            to_email=admin['email'],
-            driver_name=username,
-            alert_type=alert_type,
-            timestamp=timestamp,
-            screenshot_path=screenshot_path
-        )
+    threading.Thread(target=send_emails, daemon=True).start()
 
     return jsonify({
         'success': True,
@@ -329,3 +334,4 @@ if __name__ == '__main__':
     print("  Running on http://0.0.0.0:5000")
     print("=" * 60)
     app.run(host='0.0.0.0', port=5000, debug=True)
+

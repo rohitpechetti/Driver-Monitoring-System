@@ -12,7 +12,7 @@ class ApiService {
   // Use 10.0.2.2 for Android emulator → localhost
   // Use your machine's IP for physical devices (e.g. http://192.168.1.100:5000/api)
 
-  static const Duration _timeout = Duration(seconds: 120);
+  static const Duration _timeout = Duration(seconds: 180);
 
   // ── Stored session ─────────────────────────────────────────────────────────
 
