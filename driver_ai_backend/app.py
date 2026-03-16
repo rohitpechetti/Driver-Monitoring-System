@@ -17,6 +17,7 @@ from detection import DetectionEngine
 
 app = Flask(__name__)
 CORS(app)
+app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  # 10MB max upload
 
 # ─── Mail Configuration ────────────────────────────────────────────────────────
 app.config['MAIL_SERVER'] = os.environ.get('MAIL_SERVER', 'smtp.gmail.com')
@@ -167,6 +168,8 @@ def log_alert():
     timestamp = data.get('timestamp', datetime.now().isoformat())
     screenshot_b64 = data.get('screenshot')
 
+    print(f"[Alert] Received: {alert_type} from {username}, screenshot: {'YES' if screenshot_b64 else 'NO'}")
+
     screenshot_path = None
     if screenshot_b64:
         screenshot_path = save_screenshot(screenshot_b64, username, timestamp)
@@ -203,16 +206,18 @@ def save_screenshot(b64_data: str, username: str, timestamp: str) -> str:
     """Decode and save base64 screenshot to disk."""
     import base64
     try:
-        clean = b64_data.split(',')[-1]  # strip data:image/jpeg;base64, prefix
+        clean = b64_data.split(',')[-1]
         img_data = base64.b64decode(clean)
+        print(f"[Screenshot] Decoded size: {len(img_data)} bytes")
         safe_ts = timestamp.replace(':', '-').replace('.', '-')
         filename = f"{username}_{safe_ts}.jpg"
         filepath = os.path.join(SCREENSHOTS_DIR, filename)
         with open(filepath, 'wb') as f:
             f.write(img_data)
+        print(f"[Screenshot] Saved to: {filepath}")
         return filepath
     except Exception as e:
-        print(f"Screenshot save error: {e}")
+        print(f"[Screenshot] Save error: {e}")
         return None
 
 
