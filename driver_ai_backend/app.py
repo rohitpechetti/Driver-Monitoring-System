@@ -180,15 +180,24 @@ def log_alert():
     import threading
     def send_emails():
         try:
+            # Get all admins
             admins = db.get_approved_admins()
-            print(f"[Alert] Sending emails to {len(admins)} admins for: {alert_type}")
-            for admin in admins:
+
+            # Get all superadmins
+            superadmins = db.get_superadmins()
+
+            # Combine both lists
+            recipients = admins + superadmins
+
+            print(f"[Alert] Sending emails to {len(recipients)} recipients for: {alert_type}")
+
+            for user in recipients:
                 email_service.send_alert_email(
-                    to_email=admin['email'],
-                    driver_name=username,
-                    alert_type=alert_type,
-                    timestamp=timestamp,
-                    screenshot_path=screenshot_path
+                to_email=user['email'],
+                driver_name=username,
+                alert_type=alert_type,
+                timestamp=timestamp,
+                screenshot_path=screenshot_path
                 )
         except Exception as e:
             print(f"[Alert] Email thread error: {e}")

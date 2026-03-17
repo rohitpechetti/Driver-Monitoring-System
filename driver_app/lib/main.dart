@@ -8,19 +8,21 @@ import 'screens/admin_dashboard.dart';
 import 'screens/superadmin_panel.dart';
 import 'services/api_service.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Catch Flutter framework errors — prevent full app crash
   FlutterError.onError = (FlutterErrorDetails details) {
     debugPrint('Flutter error caught: ${details.exception}');
-    debugPrint('${details.stack}');
   };
 
-  SystemChrome.setPreferredOrientations([
+  await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,
   ]);
+
+  // Full immersive mode — hides status bar and navigation bar
+  await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+
   runApp(const DriverMonitorApp());
 }
 
@@ -35,10 +37,10 @@ class DriverMonitorApp extends StatelessWidget {
       theme: _buildTheme(),
       home: const SplashScreen(),
       routes: {
-        '/login': (_) => const LoginScreen(),
-        '/register': (_) => const RegisterScreen(),
-        '/detection': (_) => const DetectionScreen(),
-        '/admin': (_) => const AdminDashboard(),
+        '/login':      (_) => const LoginScreen(),
+        '/register':   (_) => const RegisterScreen(),
+        '/detection':  (_) => const DetectionScreen(),
+        '/admin':      (_) => const AdminDashboard(),
         '/superadmin': (_) => const SuperAdminPanel(),
       },
     );
@@ -46,8 +48,8 @@ class DriverMonitorApp extends StatelessWidget {
 
   ThemeData _buildTheme() {
     const primaryColor = Color(0xFF0A1628);
-    const accentColor = Color(0xFF00D4FF);
-    const dangerColor = Color(0xFFFF3B30);
+    const accentColor  = Color(0xFF00D4FF);
+    const dangerColor  = Color(0xFFFF3B30);
 
     return ThemeData(
       useMaterial3: true,
@@ -92,7 +94,6 @@ class DriverMonitorApp extends StatelessWidget {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         elevation: 4,
       ),
-      fontFamily: 'Roboto',
     );
   }
 }
@@ -109,18 +110,25 @@ class SplashScreen extends StatefulWidget {
 class _SplashScreenState extends State<SplashScreen>
     with SingleTickerProviderStateMixin {
   late AnimationController _ctrl;
-  late Animation<double> _fade;
+  late Animation<double>   _fade;
 
   @override
   void initState() {
     super.initState();
-    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1200));
-    _fade = Tween<double>(begin: 0, end: 1).animate(CurvedAnimation(
-      parent: _ctrl,
-      curve: Curves.easeIn,
-    ));
+    _ctrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 1200));
+    _fade = Tween<double>(begin: 0, end: 1).animate(
+        CurvedAnimation(parent: _ctrl, curve: Curves.easeIn));
     _ctrl.forward();
+    // Wake server in background while splash shows
+    ApiService.wakeServer();
     _checkSession();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
   }
 
   Future<void> _checkSession() async {
@@ -134,23 +142,15 @@ class _SplashScreenState extends State<SplashScreen>
       final role = session['role'] as String? ?? 'user';
       switch (role) {
         case 'superadmin':
-          Navigator.pushReplacementNamed(context, '/superadmin',
-              arguments: session);
+          Navigator.pushReplacementNamed(context, '/superadmin', arguments: session);
           break;
         case 'admin':
           Navigator.pushReplacementNamed(context, '/admin', arguments: session);
           break;
         default:
-          Navigator.pushReplacementNamed(context, '/detection',
-              arguments: session);
+          Navigator.pushReplacementNamed(context, '/detection', arguments: session);
       }
     }
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
   }
 
   @override
@@ -164,8 +164,7 @@ class _SplashScreenState extends State<SplashScreen>
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Container(
-                width: 100,
-                height: 100,
+                width: 100, height: 100,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   gradient: const RadialGradient(
@@ -174,33 +173,29 @@ class _SplashScreenState extends State<SplashScreen>
                   boxShadow: [
                     BoxShadow(
                       color: const Color(0xFF00D4FF).withOpacity(0.4),
-                      blurRadius: 30,
-                      spreadRadius: 10,
+                      blurRadius: 30, spreadRadius: 10,
                     ),
                   ],
                 ),
-                child: const Icon(Icons.remove_red_eye, size: 50, color: Colors.white),
+                child: const Icon(Icons.remove_red_eye,
+                    size: 50, color: Colors.white),
               ),
               const SizedBox(height: 24),
-              const Text(
-                'DRIVER MONITOR',
-                style: TextStyle(
-                  fontSize: 28,
-                  fontWeight: FontWeight.w900,
-                  color: Colors.white,
-                  letterSpacing: 4,
-                ),
-              ),
+              const Text('DRIVER MONITOR',
+                  style: TextStyle(
+                      fontSize: 28,
+                      fontWeight: FontWeight.w900,
+                      color: Colors.white,
+                      letterSpacing: 4)),
               const SizedBox(height: 8),
-              const Text(
-                'AI Safety System',
-                style: TextStyle(fontSize: 14, color: Color(0xFF00D4FF), letterSpacing: 2),
-              ),
+              const Text('AI Safety System',
+                  style: TextStyle(
+                      fontSize: 14,
+                      color: Color(0xFF00D4FF),
+                      letterSpacing: 2)),
               const SizedBox(height: 48),
               const CircularProgressIndicator(
-                color: Color(0xFF00D4FF),
-                strokeWidth: 2,
-              ),
+                  color: Color(0xFF00D4FF), strokeWidth: 2),
             ],
           ),
         ),

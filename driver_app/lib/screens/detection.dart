@@ -6,9 +6,11 @@ import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:camera/camera.dart';
 import 'package:audioplayers/audioplayers.dart';
-import 'package:vibration/vibration.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
+import 'package:kiosk_mode/kiosk_mode.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import '../services/api_service.dart';
 
@@ -36,12 +38,12 @@ final Map<String, AlertInfo> alertMap = {
 
 // ── Detection thresholds ───────────────────────────────────────────────────────
 
-const double _earThreshold       = 0.22; // below = eyes closed
-const int    _earConsecFrames    = 15;   // frames before drowsiness alert
-const double _yawThreshold       = 25.0; // degrees head turn = distracted
+const double _earThreshold = 0.22;       // below = eyes closed
+const int _earConsecFrames = 15;         // frames before drowsiness alert
+const double _yawThreshold = 25.0;       // degrees head turn = distracted
 const double _pitchDownThreshold = -20.0;// degrees chin down = head drop
-const int    _noFaceFrames       = 20;   // frames without face = no driver
-const int    _cooldownSeconds    = 5;    // seconds between same alert type
+const int _noFaceFrames = 20;            // frames without face = no driver
+const int _cooldownSeconds = 5;          // seconds between same alert type
 
 // ── Screen ─────────────────────────────────────────────────────────────────────
 
@@ -56,20 +58,20 @@ class _DetectionScreenState extends State<DetectionScreen>
     with TickerProviderStateMixin {
   // ── State ──────────────────────────────────────────────────────────────────
   Map<String, dynamic>? _user;
-  CameraController?     _camera;
+  CameraController? _camera;
   bool _cameraReady = false;
-  bool _detecting   = false;
-  bool _processing  = false;
+  bool _detecting = false;
+  bool _processing = false;
   String? _currentAlert;
-  Timer?  _alertClearTimer;
-  int _frameCount   = 0;
-  int _totalAlerts  = 0;
+  Timer? _alertClearTimer;
+  int _frameCount = 0;
+  int _totalAlerts = 0;
 
   // ── ML Kit ─────────────────────────────────────────────────────────────────
   late final FaceDetector _faceDetector;
 
   // ── Detection counters ─────────────────────────────────────────────────────
-  int _earCounter    = 0;
+  int _earCounter = 0;
   int _noFaceCounter = 0;
   final Map<String, DateTime> _alertCooldown = {};
 
@@ -77,16 +79,16 @@ class _DetectionScreenState extends State<DetectionScreen>
   double? _lastEar;
   double? _lastYaw;
   double? _lastPitch;
-  int     _facesDetected = 0;
+  int _facesDetected = 0;
 
   // ── Audio ──────────────────────────────────────────────────────────────────
   final AudioPlayer _audio = AudioPlayer();
 
   // ── Animations ────────────────────────────────────────────────────────────
   late AnimationController _pulseCtrl;
-  late Animation<double>   _pulseAnim;
+  late Animation<double> _pulseAnim;
   late AnimationController _alertCtrl;
-  late Animation<double>   _alertAnim;
+  late Animation<double> _alertAnim;
 
   @override
   void initState() {
@@ -95,12 +97,12 @@ class _DetectionScreenState extends State<DetectionScreen>
     // ML Kit face detector — request landmarks + classifications
     _faceDetector = FaceDetector(
       options: FaceDetectorOptions(
-        enableLandmarks:       true,
-        enableClassification:  true, // gives eye open probability
-        enableTracking:        true,
-        enableContours:        false,
-        performanceMode:       FaceDetectorMode.fast,
-        minFaceSize:           0.15,
+        enableLandmarks: true,
+        enableClassification: true, // gives eye open probability
+        enableTracking: true,
+        enableContours: false,
+        performanceMode: FaceDetectorMode.fast,
+        minFaceSize: 0.15,
       ),
     );
 
@@ -161,23 +163,45 @@ class _DetectionScreenState extends State<DetectionScreen>
 
   // ── Detection loop ─────────────────────────────────────────────────────────
 
-  void _startDetection() {
+  void _startDetection() async {
     setState(() => _detecting = true);
+
+    try {
+      // Enable kiosk mode (locks phone to this app)
+      await startKioskMode();
+    } catch (e) {
+      debugPrint("Kiosk mode start error: $e");
+    }
+
+    // Lock system UI
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+
+    // Keep screen awake
+    WakelockPlus.enable();
+
+    // Start camera detection
     _camera?.startImageStream(_onCameraImage);
   }
 
-  void _stopDetection() {
+  void _stopDetection() async {
+    try {
+      // Disable kiosk mode
+      await stopKioskMode();
+    } catch (e) {
+      debugPrint("Kiosk mode stop error: $e");
+    }
+
     _camera?.stopImageStream();
     _alertClearTimer?.cancel();
     setState(() {
-      _detecting      = false;
-      _currentAlert   = null;
-      _earCounter     = 0;
-      _noFaceCounter  = 0;
-      _lastEar        = null;
-      _lastYaw        = null;
-      _lastPitch      = null;
-      _facesDetected  = 0;
+      _detecting = false;
+      _currentAlert = null;
+      _earCounter = 0;
+      _noFaceCounter = 0;
+      _lastEar = null;
+      _lastYaw = null;
+      _lastPitch = null;
+      _facesDetected = 0;
     });
   }
 
@@ -190,12 +214,18 @@ class _DetectionScreenState extends State<DetectionScreen>
     try {
       // Convert CameraImage to ML Kit InputImage
       final inputImage = _buildInputImage(image);
-      if (inputImage == null) { _processing = false; return; }
+      if (inputImage == null) {
+        _processing = false;
+        return;
+      }
 
       // Run face detection
       final faces = await _faceDetector.processImage(inputImage);
 
-      if (!mounted) { _processing = false; return; }
+      if (!mounted) {
+        _processing = false;
+        return;
+      }
 
       setState(() => _facesDetected = faces.length);
 
@@ -223,7 +253,8 @@ class _DetectionScreenState extends State<DetectionScreen>
     try {
       final camera = _camera!.description;
       final rotation = InputImageRotationValue.fromRawValue(
-          camera.sensorOrientation) ?? InputImageRotation.rotation0deg;
+              camera.sensorOrientation) ??
+          InputImageRotation.rotation0deg;
 
       final format = InputImageFormatValue.fromRawValue(image.format.raw);
       if (format == null) return null;
@@ -264,9 +295,9 @@ class _DetectionScreenState extends State<DetectionScreen>
   // Analyze detected face for drowsiness, distraction, head drop
   Future<void> _analyzeFace(Face face) async {
     // ── Eye openness (ML Kit gives probability 0.0–1.0) ───────────────────
-    final leftEyeOpen  = face.leftEyeOpenProbability  ?? 1.0;
+    final leftEyeOpen = face.leftEyeOpenProbability ?? 1.0;
     final rightEyeOpen = face.rightEyeOpenProbability ?? 1.0;
-    final avgEyeOpen   = (leftEyeOpen + rightEyeOpen) / 2.0;
+    final avgEyeOpen = (leftEyeOpen + rightEyeOpen) / 2.0;
 
     // Convert to EAR-like value (invert: 0=closed, 1=open)
     // EAR threshold 0.22 mapped: eye open prob < 0.35 ≈ closed
@@ -285,12 +316,12 @@ class _DetectionScreenState extends State<DetectionScreen>
     }
 
     // ── Head pose (Euler angles in degrees) ───────────────────────────────
-    final yaw   = face.headEulerAngleY ?? 0.0; // left/right
+    final yaw = face.headEulerAngleY ?? 0.0;   // left/right
     final pitch = face.headEulerAngleX ?? 0.0; // up/down
     // final roll = face.headEulerAngleZ ?? 0.0; // tilt
 
     setState(() {
-      _lastYaw   = yaw;
+      _lastYaw = yaw;
       _lastPitch = pitch;
     });
 
@@ -334,7 +365,7 @@ class _DetectionScreenState extends State<DetectionScreen>
     _vibrate();
 
     // Log to backend (fire and forget — don't await to avoid blocking UI)
-    final username  = _user?['username'] ?? 'unknown';
+    final username = _user?['username'] ?? 'unknown';
     final timestamp = DateTime.now().toIso8601String();
 
     // Capture screenshot safely without stopping detection stream
@@ -358,7 +389,9 @@ class _DetectionScreenState extends State<DetectionScreen>
     try {
       if (_camera != null && _camera!.value.isInitialized) {
         // Stop stream
-        try { await _camera!.stopImageStream(); } catch (_) {}
+        try {
+          await _camera!.stopImageStream();
+        } catch (_) {}
         await Future.delayed(const Duration(milliseconds: 300));
 
         // Take picture
@@ -379,23 +412,28 @@ class _DetectionScreenState extends State<DetectionScreen>
         // Restart stream
         await Future.delayed(const Duration(milliseconds: 300));
         if (_detecting && mounted) {
-          try { await _camera!.startImageStream(_onCameraImage); } catch (_) {}
+          try {
+            await _camera!.startImageStream(_onCameraImage);
+          } catch (_) {}
         }
       }
     } catch (e) {
       debugPrint('Capture error: $e');
       if (_detecting && mounted) {
-        try { await _camera?.startImageStream(_onCameraImage); } catch (_) {}
+        try {
+          await _camera?.startImageStream(_onCameraImage);
+        } catch (_) {}
       }
     }
 
     // Log to backend
-    debugPrint('Logging alert: $alertType, screenshot: ${screenshot != null ? "YES" : "NO"}');
+    debugPrint(
+        'Logging alert: $alertType, screenshot: ${screenshot != null ? "YES" : "NO"}');
     try {
       final result = await ApiService.logAlert(
-        username:         username,
-        alertType:        alertType,
-        timestamp:        timestamp,
+        username: username,
+        alertType: alertType,
+        timestamp: timestamp,
         screenshotBase64: screenshot,
       );
       debugPrint('Log result: $result');
@@ -405,41 +443,29 @@ class _DetectionScreenState extends State<DetectionScreen>
   }
 
   Future<void> _playAlarm() async {
-    bool played = false;
-    // Try asset sound first
     try {
       await _audio.stop();
       await _audio.setVolume(1.0);
-      await _audio.setReleaseMode(ReleaseMode.stop);
       await _audio.play(AssetSource('alarm.mp3'));
-      played = true;
-      debugPrint('Audio: playing from asset');
     } catch (e) {
-      debugPrint('Audio asset failed: $e');
+      debugPrint('Audio failed: $e');
     }
-    // Fallback: stronger vibration if sound fails
-    if (!played) {
-      try {
-        final has = await Vibration.hasVibrator() ?? false;
-        if (has) {
-          Vibration.vibrate(
-            pattern: [0, 800, 200, 800, 200, 1000],
-            intensities: [0, 255, 0, 255, 0, 255],
-          );
-        }
-      } catch (_) {}
-    }
+    // Always vibrate using Flutter built-in
+    _vibrate();
   }
 
   Future<void> _vibrate() async {
     try {
-      final has = await Vibration.hasVibrator() ?? false;
-      if (has) {
-        Vibration.vibrate(
-          pattern: [0, 300, 100, 300, 100, 500],
-          intensities: [0, 128, 0, 200, 0, 255],
-        );
-      }
+      // Use Flutter built-in haptic feedback — no external package needed
+      HapticFeedback.heavyImpact();
+      await Future.delayed(const Duration(milliseconds: 200));
+      HapticFeedback.heavyImpact();
+      await Future.delayed(const Duration(milliseconds: 200));
+      HapticFeedback.heavyImpact();
+      await Future.delayed(const Duration(milliseconds: 400));
+      HapticFeedback.heavyImpact();
+      await Future.delayed(const Duration(milliseconds: 200));
+      HapticFeedback.heavyImpact();
     } catch (_) {}
   }
 
@@ -455,48 +481,73 @@ class _DetectionScreenState extends State<DetectionScreen>
   Widget build(BuildContext context) {
     final alertInfo = _currentAlert != null ? alertMap[_currentAlert!] : null;
 
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Stack(
-        children: [
-          // Camera preview
-          if (_cameraReady && _camera != null)
-            Positioned.fill(child: CameraPreview(_camera!))
-          else
-            const Positioned.fill(child: _CameraPlaceholder()),
+    // Block back button while detection is running
+    return PopScope(
+      canPop: !_detecting,
+      onPopInvoked: (didPop) {
+        if (_detecting && !didPop) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Stop detection first before leaving'),
+              backgroundColor: Colors.red,
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+      },
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        body: Stack(
+          children: [
+            // Camera preview
+            if (_cameraReady && _camera != null)
+              Positioned.fill(child: CameraPreview(_camera!))
+            else
+              const Positioned.fill(child: _CameraPlaceholder()),
 
-          // Alert colour wash
-          if (_currentAlert != null)
-            Positioned.fill(
-              child: FadeTransition(
-                opacity: _alertAnim,
-                child: Container(
-                    color: (alertInfo?.color ?? Colors.red).withOpacity(0.25)),
+            // Alert colour wash
+            if (_currentAlert != null)
+              Positioned.fill(
+                child: FadeTransition(
+                  opacity: _alertAnim,
+                  child: Container(
+                    color: (alertInfo?.color ?? Colors.red).withOpacity(0.25),
+                  ),
+                ),
               ),
-            ),
 
-          // Top bar
-          Positioned(top: 0, left: 0, right: 0, child: _buildTopBar()),
+            // Top bar
+            Positioned(top: 0, left: 0, right: 0, child: _buildTopBar()),
 
-          // Metrics band
-          Positioned(
-              bottom: 140, left: 0, right: 0, child: _buildMetricsBand()),
-
-          // Alert banner
-          if (_currentAlert != null)
+            // Metrics band
             Positioned(
-              top: MediaQuery.of(context).padding.top + 80,
-              left: 16,
-              right: 16,
-              child: ScaleTransition(
-                  scale: _alertAnim,
-                  child: _buildAlertBanner(alertInfo)),
+              bottom: 140,
+              left: 0,
+              right: 0,
+              child: _buildMetricsBand(),
             ),
 
-          // Bottom controls
-          Positioned(
-              bottom: 0, left: 0, right: 0, child: _buildBottomControls()),
-        ],
+            // Alert banner
+            if (_currentAlert != null)
+              Positioned(
+                top: MediaQuery.of(context).padding.top + 80,
+                left: 16,
+                right: 16,
+                child: ScaleTransition(
+                  scale: _alertAnim,
+                  child: _buildAlertBanner(alertInfo),
+                ),
+              ),
+
+            // Bottom controls
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: _buildBottomControls(),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -512,59 +563,68 @@ class _DetectionScreenState extends State<DetectionScreen>
           colors: [Colors.black.withOpacity(0.85), Colors.transparent],
         ),
       ),
-      child: Row(children: [
-        const Icon(Icons.remove_red_eye, color: Color(0xFF00D4FF), size: 20),
-        const SizedBox(width: 8),
-        const Text('DRIVER MONITOR',
+      child: Row(
+        children: [
+          const Icon(Icons.remove_red_eye, color: Color(0xFF00D4FF), size: 20),
+          const SizedBox(width: 8),
+          const Text(
+            'DRIVER MONITOR',
             style: TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.w900,
-                letterSpacing: 2,
-                fontSize: 13)),
-        const Spacer(),
-        // Face indicator
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            color: (_facesDetected > 0 ? Colors.green : Colors.red)
-                .withOpacity(0.2),
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Row(children: [
-            Icon(
-              _facesDetected > 0 ? Icons.face : Icons.no_accounts,
-              color: _facesDetected > 0 ? Colors.green : Colors.red,
-              size: 14,
+              color: Colors.white,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 2,
+              fontSize: 13,
             ),
-            const SizedBox(width: 4),
-            Text(
-              _facesDetected > 0 ? 'Face detected' : 'No face',
-              style: TextStyle(
-                color: _facesDetected > 0 ? Colors.green : Colors.red,
-                fontSize: 11,
+          ),
+          const Spacer(),
+          // Face indicator
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: (_facesDetected > 0 ? Colors.green : Colors.red)
+                  .withOpacity(0.2),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  _facesDetected > 0 ? Icons.face : Icons.no_accounts,
+                  color: _facesDetected > 0 ? Colors.green : Colors.red,
+                  size: 14,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  _facesDetected > 0 ? 'Face detected' : 'No face',
+                  style: TextStyle(
+                    color: _facesDetected > 0 ? Colors.green : Colors.red,
+                    fontSize: 11,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          GestureDetector(
+            onTap: _logout,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: Colors.red.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: Colors.red.withOpacity(0.5)),
+              ),
+              child: const Text(
+                'LOGOUT',
+                style: TextStyle(
+                  color: Colors.red,
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
-          ]),
-        ),
-        const SizedBox(width: 10),
-        GestureDetector(
-          onTap: _logout,
-          child: Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-            decoration: BoxDecoration(
-              color: Colors.red.withOpacity(0.2),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: Colors.red.withOpacity(0.5)),
-            ),
-            child: const Text('LOGOUT',
-                style: TextStyle(
-                    color: Colors.red,
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold)),
           ),
-        ),
-      ]),
+        ],
+      ),
     );
   }
 
@@ -579,32 +639,40 @@ class _DetectionScreenState extends State<DetectionScreen>
             color: (info?.color ?? Colors.red).withOpacity(0.5),
             blurRadius: 20,
             spreadRadius: 4,
-          )
+          ),
         ],
       ),
-      child: Row(children: [
-        Icon(info?.icon ?? Icons.warning, color: Colors.white, size: 32),
-        const SizedBox(width: 14),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('⚠ ALERT',
+      child: Row(
+        children: [
+          Icon(info?.icon ?? Icons.warning, color: Colors.white, size: 32),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  '⚠ ALERT',
                   style: TextStyle(
-                      color: Colors.white70,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 1.5)),
-              const SizedBox(height: 2),
-              Text(_currentAlert ?? '',
+                    color: Colors.white70,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 1.5,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  _currentAlert ?? '',
                   style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w900)),
-            ],
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ],
+            ),
           ),
-        ),
-      ]),
+        ],
+      ),
     );
   }
 
@@ -624,23 +692,27 @@ class _DetectionScreenState extends State<DetectionScreen>
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: [
-          _metricItem('EYE OPEN',
-              _lastEar != null ? '${(_lastEar! * 100).toInt()}%' : '--',
-              _lastEar != null && _lastEar! < 0.35
-                  ? Colors.red
-                  : Colors.green),
+          _metricItem(
+            'EYE OPEN',
+            _lastEar != null ? '${(_lastEar! * 100).toInt()}%' : '--',
+            _lastEar != null && _lastEar! < 0.35 ? Colors.red : Colors.green,
+          ),
           _divider(),
-          _metricItem('YAW',
-              _lastYaw != null ? '${_lastYaw!.toInt()}°' : '--',
-              _lastYaw != null && _lastYaw!.abs() > _yawThreshold
-                  ? Colors.orange
-                  : Colors.white70),
+          _metricItem(
+            'YAW',
+            _lastYaw != null ? '${_lastYaw!.toInt()}°' : '--',
+            _lastYaw != null && _lastYaw!.abs() > _yawThreshold
+                ? Colors.orange
+                : Colors.white70,
+          ),
           _divider(),
-          _metricItem('PITCH',
-              _lastPitch != null ? '${_lastPitch!.toInt()}°' : '--',
-              _lastPitch != null && _lastPitch! < _pitchDownThreshold
-                  ? Colors.orange
-                  : Colors.white70),
+          _metricItem(
+            'PITCH',
+            _lastPitch != null ? '${_lastPitch!.toInt()}°' : '--',
+            _lastPitch != null && _lastPitch! < _pitchDownThreshold
+                ? Colors.orange
+                : Colors.white70,
+          ),
           _divider(),
           _metricItem('ALERTS', '$_totalAlerts', Colors.orange),
         ],
@@ -649,17 +721,27 @@ class _DetectionScreenState extends State<DetectionScreen>
   }
 
   Widget _metricItem(String label, String value, Color valueColor) {
-    return Column(children: [
-      Text(label,
+    return Column(
+      children: [
+        Text(
+          label,
           style: const TextStyle(
-              color: Colors.white38, fontSize: 9, letterSpacing: 0.8)),
-      const SizedBox(height: 2),
-      Text(value,
+            color: Colors.white38,
+            fontSize: 9,
+            letterSpacing: 0.8,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          value,
           style: TextStyle(
-              color: valueColor,
-              fontSize: 15,
-              fontWeight: FontWeight.bold)),
-    ]);
+            color: valueColor,
+            fontSize: 15,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ],
+    );
   }
 
   Widget _divider() =>
@@ -676,58 +758,62 @@ class _DetectionScreenState extends State<DetectionScreen>
           colors: [Colors.black.withOpacity(0.9), Colors.transparent],
         ),
       ),
-      child: Row(children: [
-        // EAR counter visual
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Eye closed: $_earCounter/$_earConsecFrames',
-                  style: const TextStyle(color: Colors.white54, fontSize: 11)),
-              const SizedBox(height: 4),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(4),
-                child: LinearProgressIndicator(
-                  value: _earCounter / _earConsecFrames,
-                  backgroundColor: Colors.white12,
-                  valueColor: AlwaysStoppedAnimation<Color>(
-                    _earCounter > _earConsecFrames * 0.6
-                        ? Colors.red
-                        : Colors.orange,
-                  ),
-                  minHeight: 6,
+      child: Row(
+        children: [
+          // EAR counter visual
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Eye closed: $_earCounter/$_earConsecFrames',
+                  style: const TextStyle(color: Colors.white54, fontSize: 11),
                 ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(width: 16),
-        // Start/Stop button
-        AnimatedBuilder(
-          animation: _pulseAnim,
-          builder: (_, child) => Transform.scale(
-              scale: _detecting ? _pulseAnim.value : 1.0, child: child),
-          child: ElevatedButton.icon(
-            onPressed: _cameraReady
-                ? (_detecting ? _stopDetection : _startDetection)
-                : null,
-            icon: Icon(_detecting ? Icons.stop : Icons.play_arrow),
-            label: Text(_detecting ? 'STOP' : 'START'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _detecting
-                  ? Colors.red.shade700
-                  : const Color(0xFF00D4FF),
-              foregroundColor:
-                  _detecting ? Colors.white : Colors.black,
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 28, vertical: 16),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14)),
-              elevation: _detecting ? 8 : 2,
+                const SizedBox(height: 4),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: LinearProgressIndicator(
+                    value: _earCounter / _earConsecFrames,
+                    backgroundColor: Colors.white12,
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      _earCounter > _earConsecFrames * 0.6
+                          ? Colors.red
+                          : Colors.orange,
+                    ),
+                    minHeight: 6,
+                  ),
+                ),
+              ],
             ),
           ),
-        ),
-      ]),
+          const SizedBox(width: 16),
+          // Start/Stop button
+          AnimatedBuilder(
+            animation: _pulseAnim,
+            builder: (_, child) => Transform.scale(
+              scale: _detecting ? _pulseAnim.value : 1.0,
+              child: child,
+            ),
+            child: ElevatedButton.icon(
+              onPressed: _cameraReady
+                  ? (_detecting ? _stopDetection : _startDetection)
+                  : null,
+              icon: Icon(_detecting ? Icons.stop : Icons.play_arrow),
+              label: Text(_detecting ? 'STOP' : 'START'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor:
+                    _detecting ? Colors.red.shade700 : const Color(0xFF00D4FF),
+                foregroundColor: _detecting ? Colors.white : Colors.black,
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 28, vertical: 16),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14)),
+                elevation: _detecting ? 8 : 2,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -746,8 +832,10 @@ class _CameraPlaceholder extends StatelessWidget {
         children: [
           Icon(Icons.videocam_off, size: 60, color: Colors.white24),
           SizedBox(height: 12),
-          Text('Camera initializing...',
-              style: TextStyle(color: Colors.white38)),
+          Text(
+            'Camera initializing...',
+            style: TextStyle(color: Colors.white38),
+          ),
         ],
       ),
     );

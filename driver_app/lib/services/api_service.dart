@@ -14,6 +14,15 @@ class ApiService {
 
   static const Duration _timeout = Duration(seconds: 180);
 
+  // ── Wake server (for Render free tier) ───────────────────────────────────
+  static Future<void> wakeServer() async {
+    try {
+      await http.get(Uri.parse('$baseUrl/health')).timeout(const Duration(seconds: 5));
+    } catch (_) {
+      // Ignore errors, we just want to send a request to wake it up
+    }
+  }
+
   // ── Stored session ─────────────────────────────────────────────────────────
 
   static Future<void> saveSession(Map<String, dynamic> user) async {

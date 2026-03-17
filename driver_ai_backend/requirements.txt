@@ -4,4 +4,4 @@ flask-mail==0.10.0
 numpy==1.26.4
 reportlab==4.2.2
 pillow==10.4.0
- 
+gunicorn
