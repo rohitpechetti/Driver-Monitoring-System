@@ -38,12 +38,23 @@ final Map<String, AlertInfo> alertMap = {
 
 // ── Detection thresholds ───────────────────────────────────────────────────────
 
-const double _earThreshold = 0.22;       // below = eyes closed
-const int _earConsecFrames = 15;         // frames before drowsiness alert
-const double _yawThreshold = 25.0;       // degrees head turn = distracted
-const double _pitchDownThreshold = -20.0;// degrees chin down = head drop
-const int _noFaceFrames = 20;            // frames without face = no driver
-const int _cooldownSeconds = 5;          // seconds between same alert type
+const double _earThreshold = 0.22;        // below = eyes closed
+const int _earConsecFrames = 15;          // frames before drowsiness alert
+const double _yawThreshold = 25.0;        // degrees head turn = distracted
+const double _pitchDownThreshold = -20.0; // degrees chin down = head drop
+const int _noFaceFrames = 20;             // frames without face = no driver
+const int _cooldownSeconds = 5;           // seconds between same alert type
+
+// ── Phone detection thresholds (heuristic, no extra package) ──────────────────
+// Phone-use signature: eyes open + head pitched down moderately + face drifted
+// low in frame. Distinct from head-drop (sudden, steep) and drowsiness (eyes shut).
+const double _phonePitchMin   = 5.0;  // pitch > +5° = looking slightly downward
+const double _phonePitchMax   = 35.0; // pitch < +35° = not a full head-drop
+const double _phoneYawMax     = 20.0; // yaw within ±20° (still facing forward-ish)
+// Face bounding-box centroid Y expressed as fraction of frame height.
+// When driver looks down at a phone the face rides high in the front-camera frame.
+const double _phoneFaceYFrac  = 0.42; // centroid above 42 % of frame = face high up
+const int    _phoneConsecFrames = 18; // ~0.9 s at ~20 fps before alerting
 
 // ── Screen ─────────────────────────────────────────────────────────────────────
 
@@ -73,6 +84,7 @@ class _DetectionScreenState extends State<DetectionScreen>
   // ── Detection counters ─────────────────────────────────────────────────────
   int _earCounter = 0;
   int _noFaceCounter = 0;
+  int _phoneCounter = 0; // consecutive frames matching phone-use heuristic
   final Map<String, DateTime> _alertCooldown = {};
 
   // ── Metrics display ────────────────────────────────────────────────────────
@@ -80,6 +92,9 @@ class _DetectionScreenState extends State<DetectionScreen>
   double? _lastYaw;
   double? _lastPitch;
   int _facesDetected = 0;
+  // Frame dimensions — set once on first camera image, used for face-position ratio
+  double _frameWidth = 0;
+  double _frameHeight = 0;
 
   // ── Audio ──────────────────────────────────────────────────────────────────
   final AudioPlayer _audio = AudioPlayer();
@@ -198,6 +213,7 @@ class _DetectionScreenState extends State<DetectionScreen>
       _currentAlert = null;
       _earCounter = 0;
       _noFaceCounter = 0;
+      _phoneCounter = 0;
       _lastEar = null;
       _lastYaw = null;
       _lastPitch = null;
@@ -210,6 +226,12 @@ class _DetectionScreenState extends State<DetectionScreen>
     if (_processing) return; // skip frame if still processing previous
     _processing = true;
     _frameCount++;
+
+    // Capture frame dimensions once for face-position ratio calculations
+    if (_frameWidth == 0) {
+      _frameWidth = image.width.toDouble();
+      _frameHeight = image.height.toDouble();
+    }
 
     try {
       // Convert CameraImage to ML Kit InputImage
@@ -232,6 +254,7 @@ class _DetectionScreenState extends State<DetectionScreen>
       if (faces.isEmpty) {
         // No face in frame
         _earCounter = 0;
+        _phoneCounter = 0;
         _noFaceCounter++;
         if (_noFaceCounter >= _noFaceFrames) {
           await _triggerAlert('No Driver Detected');
@@ -292,7 +315,7 @@ class _DetectionScreenState extends State<DetectionScreen>
     }
   }
 
-  // Analyze detected face for drowsiness, distraction, head drop
+  // Analyze detected face for drowsiness, distraction, head drop, phone use
   Future<void> _analyzeFace(Face face) async {
     // ── Eye openness (ML Kit gives probability 0.0–1.0) ───────────────────
     final leftEyeOpen = face.leftEyeOpenProbability ?? 1.0;
@@ -307,6 +330,7 @@ class _DetectionScreenState extends State<DetectionScreen>
 
     if (eyeClosed) {
       _earCounter++;
+      _phoneCounter = 0; // eyes closed → not phone use
       if (_earCounter >= _earConsecFrames) {
         await _triggerAlert('Drowsiness Detected');
         return;
@@ -327,14 +351,51 @@ class _DetectionScreenState extends State<DetectionScreen>
 
     // Distraction: head turned sideways
     if (yaw.abs() > _yawThreshold) {
+      _phoneCounter = 0;
       await _triggerAlert('Driver Distracted');
       return;
     }
 
-    // Head drop: chin toward chest
+    // Head drop: chin toward chest (steep, sudden)
     if (pitch < _pitchDownThreshold) {
+      _phoneCounter = 0;
       await _triggerAlert('Head Drop Detected');
       return;
+    }
+
+    // ── Phone-use heuristic ───────────────────────────────────────────────
+    // Signature: eyes open + moderate downward pitch + face positioned high
+    // in the front-camera frame (driver tilts head down toward a phone).
+    //
+    // ML Kit headEulerAngleX (pitch):
+    //   negative  = head tilted back (looking up)
+    //   positive  = head tilted forward (looking down)
+    //
+    // Face bounding-box centroid Y as a fraction of frame height:
+    //   small fraction = face is near the top of frame (driver's head tilted
+    //   down pushes the face upward in a front-facing camera image).
+    if (!eyeClosed && _frameHeight > 0) {
+      final bbox = face.boundingBox;
+      final faceCentroidYFrac =
+          (bbox.top + bbox.height / 2) / _frameHeight;
+
+      final pitchInPhoneRange =
+          pitch >= _phonePitchMin && pitch <= _phonePitchMax;
+      final yawInRange = yaw.abs() <= _phoneYawMax;
+      final faceHighInFrame = faceCentroidYFrac < _phoneFaceYFrac;
+
+      if (pitchInPhoneRange && yawInRange && faceHighInFrame) {
+        _phoneCounter++;
+        if (_phoneCounter >= _phoneConsecFrames) {
+          _phoneCounter = 0; // reset so it can re-trigger after cooldown
+          await _triggerAlert('Phone Usage While Driving');
+          return;
+        }
+      } else {
+        // Gradually decay counter so brief false-positive frames don't
+        // accumulate unfairly but a real sustained event still wins.
+        if (_phoneCounter > 0) _phoneCounter--;
+      }
     }
   }
 
@@ -403,7 +464,8 @@ class _DetectionScreenState extends State<DetectionScreen>
             screenshot = 'data:image/jpeg;base64,${base64Encode(bytes)}';
             debugPrint('Screenshot captured: ${bytes.length} bytes');
           } else {
-            debugPrint('Screenshot too large: ${bytes.length} bytes, skipping');
+            debugPrint(
+                'Screenshot too large: ${bytes.length} bytes, skipping');
           }
         } catch (e) {
           debugPrint('Screenshot takePicture error: $e');
@@ -521,11 +583,7 @@ class _DetectionScreenState extends State<DetectionScreen>
 
             // Metrics band
             Positioned(
-              bottom: 140,
-              left: 0,
-              right: 0,
-              child: _buildMetricsBand(),
-            ),
+                bottom: 140, left: 0, right: 0, child: _buildMetricsBand()),
 
             // Alert banner
             if (_currentAlert != null)
@@ -541,11 +599,7 @@ class _DetectionScreenState extends State<DetectionScreen>
 
             // Bottom controls
             Positioned(
-              bottom: 0,
-              left: 0,
-              right: 0,
-              child: _buildBottomControls(),
-            ),
+                bottom: 0, left: 0, right: 0, child: _buildBottomControls()),
           ],
         ),
       ),
@@ -711,6 +765,14 @@ class _DetectionScreenState extends State<DetectionScreen>
             _lastPitch != null ? '${_lastPitch!.toInt()}°' : '--',
             _lastPitch != null && _lastPitch! < _pitchDownThreshold
                 ? Colors.orange
+                : Colors.white70,
+          ),
+          _divider(),
+          _metricItem(
+            'PHONE',
+            '$_phoneCounter/$_phoneConsecFrames',
+            _phoneCounter > _phoneConsecFrames * 0.6
+                ? Colors.red
                 : Colors.white70,
           ),
           _divider(),

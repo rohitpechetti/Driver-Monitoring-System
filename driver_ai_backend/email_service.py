@@ -2,6 +2,9 @@
 """
 Email Service - Sends alert emails with screenshots to admins.
 """
+"""
+Email Service - Sends alert emails with screenshots to admins.
+"""
 from flask_mail import Message
 import os
 import traceback
@@ -35,30 +38,61 @@ class EmailService:
 
         try:
             subject = f"[DMS Alert] {alert_type} - Driver: {driver_name}"
+
+            # Plain text fallback
             body = f"""
 Driver Monitoring System - Incident Alert
-==========================================
 
 Driver Name  : {driver_name}
 Alert Type   : {alert_type}
 Time         : {timestamp}
 
-Please review the attached screenshot and take appropriate action.
-
-— Driver Monitoring System
+Please review the situation immediately.
             """.strip()
 
-            msg = Message(subject=subject, recipients=[to_email], body=body)
+            msg = Message(subject=subject, recipients=[to_email])
+            msg.body = body  # fallback
+
+            # HTML email
+            html_body = f"""
+<h2>🚨 Driver Monitoring Alert</h2>
+
+<p><b>Driver:</b> {driver_name}</p>
+<p><b>Alert:</b> {alert_type}</p>
+<p><b>Time:</b> {timestamp}</p>
+
+<p>Please review the situation immediately.</p>
+"""
+
+            # ✅ Attach + Embed image
+            if screenshot_path:
+                print(f"[DEBUG] Checking screenshot path: {screenshot_path}")
 
             if screenshot_path and os.path.exists(screenshot_path):
                 with open(screenshot_path, 'rb') as f:
-                    msg.attach(
-                        filename=os.path.basename(screenshot_path),
-                        content_type='image/jpeg',
-                        data=f.read()
-                    )
+                    img_data = f.read()
+
+                # Attach image
+                msg.attach(
+                    filename="driver.jpg",
+                    content_type="image/jpeg",
+                    data=img_data,
+                    headers=[('Content-ID', '<driver_image>')]
+                )
+
                 print(f"[Email] Screenshot attached: {screenshot_path}")
 
+                # Embed image in HTML
+                html_body += """
+<h3>Driver Snapshot:</h3>
+<img src="cid:driver_image" width="300"/>
+"""
+            else:
+                print("[Email] Screenshot NOT attached (missing or invalid path)")
+
+            msg.html = html_body
+
+            # Send email
             self.mail.send(msg)
             print(f"[Email] Alert sent to {to_email}: {alert_type}")
 
