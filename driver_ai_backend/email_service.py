@@ -14,9 +14,9 @@ class EmailService:
 
     def _mail_configured(self) -> bool:
         """Check if mail credentials are properly set."""
-        username = os.environ.get('MAIL_USERNAME', 'your_email@gmail.com')
-        password = os.environ.get('MAIL_PASSWORD', 'your_app_password')
-        if 'your_email' in username or 'your_app_password' in password:
+        username = os.environ.get('MAIL_USERNAME', '')
+        password = os.environ.get('MAIL_PASSWORD', '')
+        if not username or not password or 'your_email' in username or 'your_app_password' in password:
             print("[Email] Mail not configured - set MAIL_USERNAME and MAIL_PASSWORD env vars on Render")
             return False
         return True
