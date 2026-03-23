@@ -1,11 +1,14 @@
 """
 Database module - SQLite with role-based user management and incident logging.
+Includes OTP storage for password reset.
 """
 
 import sqlite3
 import hashlib
 import os
-from datetime import datetime
+import random
+import string
+from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 
 
@@ -46,6 +49,15 @@ class Database:
                     status          TEXT    NOT NULL,
                     timestamp       TEXT    NOT NULL,
                     screenshot_path TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS password_reset_otps (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    email      TEXT    NOT NULL,
+                    otp        TEXT    NOT NULL,
+                    expires_at TEXT    NOT NULL,
+                    used       INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT    NOT NULL
                 );
             """)
             # Seed default super admin if none exists
@@ -111,7 +123,8 @@ class Database:
     def get_all_users(self) -> List[Dict]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT id, username, email, role, is_approved, created_at FROM users ORDER BY created_at DESC"
+                "SELECT id, username, email, role, is_approved, created_at "
+                "FROM users ORDER BY created_at DESC"
             ).fetchall()
             return [dict(r) for r in rows]
 
@@ -126,14 +139,16 @@ class Database:
     def get_approved_admins(self) -> List[Dict]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT id, username, email FROM users WHERE role IN ('admin','superadmin') AND is_approved=1"
+                "SELECT id, username, email FROM users "
+                "WHERE role IN ('admin','superadmin') AND is_approved=1"
             ).fetchall()
             return [dict(r) for r in rows]
 
     def get_superadmins(self) -> List[Dict]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT id, username, email FROM users WHERE role='superadmin' AND is_approved=1"
+                "SELECT id, username, email FROM users "
+                "WHERE role='superadmin' AND is_approved=1"
             ).fetchall()
             return [dict(r) for r in rows]
 
@@ -149,6 +164,75 @@ class Database:
             conn.commit()
             return conn.execute("SELECT changes()").fetchone()[0] > 0
 
+    # ── OTP / Password-reset operations ───────────────────────────────────────
+
+    def generate_otp(self) -> str:
+        """Generate a cryptographically random 6-digit OTP."""
+        return ''.join(random.choices(string.digits, k=6))
+
+    def create_otp(self, email: str) -> str:
+        """
+        Invalidate any existing unused OTPs for this email, then
+        create a fresh one that expires in 10 minutes.
+        Returns the plain-text OTP.
+        """
+        otp = self.generate_otp()
+        expires_at = (datetime.now() + timedelta(minutes=10)).isoformat()
+        with self._connect() as conn:
+            # Invalidate previous OTPs for this email
+            conn.execute(
+                "UPDATE password_reset_otps SET used=1 WHERE email=? AND used=0",
+                (email,)
+            )
+            conn.execute(
+                "INSERT INTO password_reset_otps (email, otp, expires_at, used, created_at) "
+                "VALUES (?, ?, ?, 0, ?)",
+                (email, otp, expires_at, datetime.now().isoformat())
+            )
+            conn.commit()
+        return otp
+
+    def verify_otp(self, email: str, otp: str) -> bool:
+        """
+        Return True if the OTP is valid, unused, and not yet expired.
+        Does NOT mark it as used (so the same OTP can be reused in step 3).
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT expires_at FROM password_reset_otps "
+                "WHERE email=? AND otp=? AND used=0 "
+                "ORDER BY created_at DESC LIMIT 1",
+                (email, otp)
+            ).fetchone()
+            if not row:
+                return False
+            expires_at = datetime.fromisoformat(row['expires_at'])
+            return datetime.now() < expires_at
+
+    def consume_otp_and_reset_password(self, email: str, otp: str,
+                                       new_password: str) -> bool:
+        """
+        Verify OTP again, mark it as used, then update the user's password.
+        Returns True on success.
+        """
+        if not self.verify_otp(email, otp):
+            return False
+        with self._connect() as conn:
+            # Mark OTP as used
+            conn.execute(
+                "UPDATE password_reset_otps SET used=1 "
+                "WHERE email=? AND otp=? AND used=0",
+                (email, otp)
+            )
+            # Update password
+            conn.execute(
+                "UPDATE users SET password=? WHERE email=?",
+                (_hash_password(new_password), email)
+            )
+            conn.commit()
+            changed = conn.execute("SELECT changes()").fetchone()[0]
+        return changed > 0
+
     # ── Log operations ────────────────────────────────────────────────────────
 
     def create_log(self, username: str, status: str,
@@ -156,7 +240,8 @@ class Database:
         try:
             with self._connect() as conn:
                 cursor = conn.execute(
-                    "INSERT INTO logs (username, status, timestamp, screenshot_path) VALUES (?, ?, ?, ?)",
+                    "INSERT INTO logs (username, status, timestamp, screenshot_path) "
+                    "VALUES (?, ?, ?, ?)",
                     (username, status, timestamp, screenshot_path)
                 )
                 conn.commit()
@@ -180,35 +265,41 @@ class Database:
 
     def get_stats(self) -> Dict[str, Any]:
         with self._connect() as conn:
-            total_logs = conn.execute("SELECT COUNT(*) as c FROM logs").fetchone()['c']
-            total_users = conn.execute("SELECT COUNT(*) as c FROM users WHERE role='user'").fetchone()['c']
-            total_admins = conn.execute("SELECT COUNT(*) as c FROM users WHERE role='admin'").fetchone()['c']
+            total_logs = conn.execute(
+                "SELECT COUNT(*) as c FROM logs").fetchone()['c']
+            total_users = conn.execute(
+                "SELECT COUNT(*) as c FROM users WHERE role='user'").fetchone()['c']
+            total_admins = conn.execute(
+                "SELECT COUNT(*) as c FROM users WHERE role='admin'").fetchone()['c']
             pending_admins = conn.execute(
                 "SELECT COUNT(*) as c FROM users WHERE role='admin' AND is_approved=0"
             ).fetchone()['c']
 
             alert_breakdown_rows = conn.execute(
-                "SELECT status, COUNT(*) as count FROM logs GROUP BY status ORDER BY count DESC LIMIT 10"
+                "SELECT status, COUNT(*) as count FROM logs "
+                "GROUP BY status ORDER BY count DESC LIMIT 10"
             ).fetchall()
             alert_breakdown = [dict(r) for r in alert_breakdown_rows]
 
             recent_rows = conn.execute(
-                "SELECT username, status, timestamp FROM logs ORDER BY timestamp DESC LIMIT 10"
+                "SELECT username, status, timestamp FROM logs "
+                "ORDER BY timestamp DESC LIMIT 10"
             ).fetchall()
             recent_logs = [dict(r) for r in recent_rows]
 
             top_drivers_rows = conn.execute(
-                "SELECT username, COUNT(*) as incidents FROM logs GROUP BY username ORDER BY incidents DESC LIMIT 5"
+                "SELECT username, COUNT(*) as incidents FROM logs "
+                "GROUP BY username ORDER BY incidents DESC LIMIT 5"
             ).fetchall()
             top_drivers = [dict(r) for r in top_drivers_rows]
 
             return {
-                'total_logs': total_logs,
-                'total_users': total_users,
-                'total_admins': total_admins,
-                'pending_admins': pending_admins,
-                'alert_breakdown': alert_breakdown,
-                'recent_logs': recent_logs,
-                'top_drivers': top_drivers
+                'total_logs':       total_logs,
+                'total_users':      total_users,
+                'total_admins':     total_admins,
+                'pending_admins':   pending_admins,
+                'alert_breakdown':  alert_breakdown,
+                'recent_logs':      recent_logs,
+                'top_drivers':      top_drivers,
             }
 

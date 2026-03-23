@@ -17,19 +17,19 @@ from detection import DetectionEngine
 
 app = Flask(__name__)
 CORS(app)
-app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  # 10MB max upload
+app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  # 10 MB max upload
 
 # ─── Mail Configuration ────────────────────────────────────────────────────────
-app.config['MAIL_SERVER'] = os.environ.get('MAIL_SERVER', 'smtp.gmail.com')
-app.config['MAIL_PORT'] = int(os.environ.get('MAIL_PORT', 587))
-app.config['MAIL_USE_TLS'] = True
-app.config['MAIL_USERNAME'] = os.environ.get('MAIL_USERNAME', 'your_email@gmail.com')
-app.config['MAIL_PASSWORD'] = os.environ.get('MAIL_PASSWORD', 'your_app_password')
+app.config['MAIL_SERVER']         = os.environ.get('MAIL_SERVER', 'smtp.gmail.com')
+app.config['MAIL_PORT']           = int(os.environ.get('MAIL_PORT', 587))
+app.config['MAIL_USE_TLS']        = True
+app.config['MAIL_USERNAME']       = os.environ.get('MAIL_USERNAME', 'your_email@gmail.com')
+app.config['MAIL_PASSWORD']       = os.environ.get('MAIL_PASSWORD', 'your_app_password')
 app.config['MAIL_DEFAULT_SENDER'] = os.environ.get('MAIL_USERNAME', 'your_email@gmail.com')
 
-mail = Mail(app)
-db = Database()
-email_service = EmailService(mail)
+mail            = Mail(app)
+db              = Database()
+email_service   = EmailService(mail)
 detection_engine = DetectionEngine()
 
 SCREENSHOTS_DIR = os.path.join(os.path.dirname(__file__), 'screenshots')
@@ -40,18 +40,29 @@ os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
 
 @app.route('/api/register', methods=['POST'])
 def register():
-    """Register a new user. Admins require Super Admin approval."""
+    """
+    Register a new user or admin.
+    Super Admin accounts cannot be created via this endpoint —
+    they must be seeded directly in the database.
+    """
     data = request.get_json()
     required = ['username', 'email', 'password', 'role']
     if not all(k in data for k in required):
         return jsonify({'success': False, 'message': 'Missing required fields'}), 400
 
     username = data['username'].strip()
-    email = data['email'].strip().lower()
+    email    = data['email'].strip().lower()
     password = data['password']
-    role = data['role'].lower()
+    role     = data['role'].lower()
 
-    if role not in ['user', 'admin', 'superadmin']:
+    # Block self-registration as superadmin
+    if role == 'superadmin':
+        return jsonify({
+            'success': False,
+            'message': 'Super Admin accounts cannot be self-registered.'
+        }), 403
+
+    if role not in ['user', 'admin']:
         return jsonify({'success': False, 'message': 'Invalid role'}), 400
 
     if db.get_user_by_username(username):
@@ -60,15 +71,16 @@ def register():
     if db.get_user_by_email(email):
         return jsonify({'success': False, 'message': 'Email already registered'}), 409
 
-    # Only regular users are auto-approved
-    # Admins and new superadmins need approval from existing superadmin
+    # Regular users are auto-approved; admins need super-admin approval
     is_approved = 1 if role == 'user' else 0
 
     user_id = db.create_user(username, email, password, role, is_approved)
     if user_id:
-        msg = 'Registration successful' if is_approved else 'Registration submitted. Awaiting Super Admin approval.'
-        # Notify all superadmins about new admin/superadmin registration
-        if role in ['admin', 'superadmin']:
+        msg = ('Registration successful'
+               if is_approved
+               else 'Registration submitted. Awaiting Super Admin approval.')
+        # Notify all superadmins about new admin registration
+        if role == 'admin':
             superadmins = db.get_superadmins()
             for sa in superadmins:
                 email_service.send_registration_alert_to_superadmin(
@@ -87,21 +99,109 @@ def login():
 
     user = db.authenticate_user(data['username'], data['password'])
     if not user:
-        return jsonify({'success': False, 'message': 'Invalid username or password'}), 401
+        return jsonify({'success': False,
+                        'message': 'Invalid username or password'}), 401
 
     if not user['is_approved']:
-        return jsonify({'success': False, 'message': 'Account pending approval from Super Admin'}), 403
+        return jsonify({'success': False,
+                        'message': 'Account pending approval from Super Admin'}), 403
 
     return jsonify({
         'success': True,
         'message': 'Login successful',
         'user': {
-            'id': user['id'],
+            'id':       user['id'],
             'username': user['username'],
-            'email': user['email'],
-            'role': user['role']
+            'email':    user['email'],
+            'role':     user['role'],
         }
     })
+
+
+# ─── Forgot / Reset Password Endpoints ────────────────────────────────────────
+
+@app.route('/api/forgot-password', methods=['POST'])
+def forgot_password():
+    """
+    Step 1 — Request a password-reset OTP.
+    Body: { "email": "user@example.com" }
+    Sends a 6-digit OTP to the registered email (valid 10 min).
+    Always returns success=True to avoid email enumeration.
+    """
+    data  = request.get_json() or {}
+    email = data.get('email', '').strip().lower()
+
+    if not email or '@' not in email:
+        return jsonify({'success': False, 'message': 'Valid email required'}), 400
+
+    user = db.get_user_by_email(email)
+    if user:
+        otp = db.create_otp(email)
+        # Send in a background thread so the response is instant
+        import threading
+        def _send():
+            try:
+                email_service.send_password_reset_otp(
+                    to_email=email,
+                    username=user['username'],
+                    otp=otp,
+                )
+            except Exception as e:
+                print(f"[ForgotPwd] Email thread error: {e}")
+        threading.Thread(target=_send, daemon=True).start()
+    else:
+        print(f"[ForgotPwd] No account found for {email} — silently ignoring")
+
+    # Always return success to avoid leaking which emails are registered
+    return jsonify({
+        'success': True,
+        'message': 'If that email is registered, an OTP has been sent.'
+    })
+
+
+@app.route('/api/verify-otp', methods=['POST'])
+def verify_otp():
+    """
+    Step 2 — Verify OTP without resetting password yet.
+    Body: { "email": "...", "otp": "123456" }
+    """
+    data  = request.get_json() or {}
+    email = data.get('email', '').strip().lower()
+    otp   = data.get('otp', '').strip()
+
+    if not email or not otp:
+        return jsonify({'success': False, 'message': 'Email and OTP required'}), 400
+
+    if db.verify_otp(email, otp):
+        return jsonify({'success': True, 'message': 'OTP verified'})
+
+    return jsonify({'success': False, 'message': 'Invalid or expired OTP'}), 400
+
+
+@app.route('/api/reset-password', methods=['POST'])
+def reset_password():
+    """
+    Step 3 — Reset password using a verified OTP.
+    Body: { "email": "...", "otp": "123456", "new_password": "..." }
+    """
+    data         = request.get_json() or {}
+    email        = data.get('email', '').strip().lower()
+    otp          = data.get('otp', '').strip()
+    new_password = data.get('new_password', '')
+
+    if not email or not otp or not new_password:
+        return jsonify({'success': False,
+                        'message': 'Email, OTP and new password are required'}), 400
+
+    if len(new_password) < 6:
+        return jsonify({'success': False,
+                        'message': 'Password must be at least 6 characters'}), 400
+
+    ok = db.consume_otp_and_reset_password(email, otp, new_password)
+    if ok:
+        return jsonify({'success': True, 'message': 'Password reset successfully'})
+
+    return jsonify({'success': False, 'message': 'Invalid or expired OTP'}), 400
 
 
 # ─── Super Admin Endpoints ─────────────────────────────────────────────────────
@@ -163,12 +263,13 @@ def log_alert():
     if not data:
         return jsonify({'success': False, 'message': 'No data provided'}), 400
 
-    username = data.get('username', 'unknown')
-    alert_type = data.get('alert_type', 'Unknown Alert')
-    timestamp = data.get('timestamp', datetime.now().isoformat())
+    username       = data.get('username', 'unknown')
+    alert_type     = data.get('alert_type', 'Unknown Alert')
+    timestamp      = data.get('timestamp', datetime.now().isoformat())
     screenshot_b64 = data.get('screenshot')
 
-    print(f"[Alert] Received: {alert_type} from {username}, screenshot: {'YES' if screenshot_b64 else 'NO'}")
+    print(f"[Alert] Received: {alert_type} from {username}, "
+          f"screenshot: {'YES' if screenshot_b64 else 'NO'}")
 
     screenshot_path = None
     if screenshot_b64:
@@ -176,28 +277,21 @@ def log_alert():
 
     log_id = db.create_log(username, alert_type, timestamp, screenshot_path)
 
-    # Send email alerts in background thread so it doesn't block response
+    # Send email alerts in background thread
     import threading
     def send_emails():
         try:
-            # Get all admins
-            admins = db.get_approved_admins()
-
-            # Get all superadmins
+            admins     = db.get_approved_admins()
             superadmins = db.get_superadmins()
-
-            # Combine both lists
-            recipients = admins + superadmins
-
+            recipients  = admins + superadmins
             print(f"[Alert] Sending emails to {len(recipients)} recipients for: {alert_type}")
-
             for user in recipients:
                 email_service.send_alert_email(
-                to_email=user['email'],
-                driver_name=username,
-                alert_type=alert_type,
-                timestamp=timestamp,
-                screenshot_path=screenshot_path
+                    to_email=user['email'],
+                    driver_name=username,
+                    alert_type=alert_type,
+                    timestamp=timestamp,
+                    screenshot_path=screenshot_path,
                 )
         except Exception as e:
             print(f"[Alert] Email thread error: {e}")
@@ -207,7 +301,7 @@ def log_alert():
     return jsonify({
         'success': True,
         'message': 'Alert logged successfully',
-        'log_id': log_id
+        'log_id': log_id,
     })
 
 
@@ -215,10 +309,10 @@ def save_screenshot(b64_data: str, username: str, timestamp: str) -> str:
     """Decode and save base64 screenshot to disk."""
     import base64
     try:
-        clean = b64_data.split(',')[-1]
+        clean    = b64_data.split(',')[-1]
         img_data = base64.b64decode(clean)
         print(f"[Screenshot] Decoded size: {len(img_data)} bytes")
-        safe_ts = timestamp.replace(':', '-').replace('.', '-')
+        safe_ts  = timestamp.replace(':', '-').replace('.', '-')
         filename = f"{username}_{safe_ts}.jpg"
         filepath = os.path.join(SCREENSHOTS_DIR, filename)
         with open(filepath, 'wb') as f:
@@ -247,7 +341,10 @@ def download_csv():
     logs = db.get_logs(username_filter)
 
     output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=['id', 'username', 'status', 'timestamp', 'screenshot_path'])
+    writer = csv.DictWriter(
+        output,
+        fieldnames=['id', 'username', 'status', 'timestamp', 'screenshot_path'],
+    )
     writer.writeheader()
     writer.writerows(logs)
     output.seek(0)
@@ -256,7 +353,7 @@ def download_csv():
         io.BytesIO(output.getvalue().encode()),
         mimetype='text/csv',
         as_attachment=True,
-        download_name=f'driver_logs_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
+        download_name=f'driver_logs_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv',
     )
 
 
@@ -266,19 +363,23 @@ def download_pdf():
     try:
         from reportlab.lib.pagesizes import A4
         from reportlab.lib import colors
-        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+        from reportlab.platypus import (SimpleDocTemplate, Table,
+                                        TableStyle, Paragraph, Spacer)
         from reportlab.lib.styles import getSampleStyleSheet
 
         username_filter = request.args.get('username')
         logs = db.get_logs(username_filter)
 
         buffer = io.BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=A4)
+        doc    = SimpleDocTemplate(buffer, pagesize=A4)
         styles = getSampleStyleSheet()
         elements = []
 
-        elements.append(Paragraph('Driver Monitoring System - Incident Report', styles['Title']))
-        elements.append(Paragraph(f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}', styles['Normal']))
+        elements.append(Paragraph(
+            'Driver Monitoring System - Incident Report', styles['Title']))
+        elements.append(Paragraph(
+            f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}',
+            styles['Normal']))
         elements.append(Spacer(1, 20))
 
         table_data = [['ID', 'Driver', 'Alert Type', 'Timestamp']]
@@ -287,21 +388,22 @@ def download_pdf():
                 str(log.get('id', '')),
                 log.get('username', ''),
                 log.get('status', ''),
-                log.get('timestamp', '')
+                log.get('timestamp', ''),
             ])
 
         table = Table(table_data, colWidths=[40, 120, 180, 160])
         table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1a1a2e')),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 11),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f0f0f0')]),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('TOPPADDING', (0, 0), (-1, -1), 6),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('BACKGROUND',   (0, 0), (-1, 0),  colors.HexColor('#1a1a2e')),
+            ('TEXTCOLOR',    (0, 0), (-1, 0),  colors.white),
+            ('FONTNAME',     (0, 0), (-1, 0),  'Helvetica-Bold'),
+            ('FONTSIZE',     (0, 0), (-1, 0),  11),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1),
+             [colors.white, colors.HexColor('#f0f0f0')]),
+            ('GRID',         (0, 0), (-1, -1), 0.5, colors.grey),
+            ('ALIGN',        (0, 0), (-1, -1), 'CENTER'),
+            ('VALIGN',       (0, 0), (-1, -1), 'MIDDLE'),
+            ('TOPPADDING',   (0, 0), (-1, -1), 6),
+            ('BOTTOMPADDING',(0, 0), (-1, -1), 6),
         ]))
         elements.append(table)
         doc.build(elements)
@@ -311,10 +413,13 @@ def download_pdf():
             buffer,
             mimetype='application/pdf',
             as_attachment=True,
-            download_name=f'driver_report_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf'
+            download_name=f'driver_report_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf',
         )
     except ImportError:
-        return jsonify({'success': False, 'message': 'reportlab not installed. Run: pip install reportlab'}), 500
+        return jsonify({
+            'success': False,
+            'message': 'reportlab not installed. Run: pip install reportlab',
+        }), 500
 
 
 @app.route('/api/stats', methods=['GET'])
@@ -348,4 +453,5 @@ if __name__ == '__main__':
     print("  Running on http://0.0.0.0:5000")
     print("=" * 60)
     app.run(host='0.0.0.0', port=5000, debug=True)
+
 

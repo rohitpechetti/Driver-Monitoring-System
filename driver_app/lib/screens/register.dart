@@ -31,10 +31,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
     'Still connecting...',
   ];
 
+  // ── Only 'user' and 'admin' roles are available for self-registration.
+  // Super Admin accounts can only be created directly in the database.
   final List<Map<String, dynamic>> _roles = [
-    {'value': 'user',       'label': 'Driver / User', 'icon': Icons.drive_eta},
-    {'value': 'admin',      'label': 'Admin',         'icon': Icons.admin_panel_settings},
-    {'value': 'superadmin', 'label': 'Super Admin',   'icon': Icons.security},
+    {'value': 'user',  'label': 'Driver / User', 'icon': Icons.drive_eta},
+    {'value': 'admin', 'label': 'Admin',          'icon': Icons.admin_panel_settings},
   ];
 
   @override
@@ -140,7 +141,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // Role selector
+                      // ── Role selector ───────────────────────────────────
                       const Text(
                         'Select Role',
                         style: TextStyle(
@@ -157,12 +158,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           return Expanded(
                             child: GestureDetector(
                               onTap: () =>
-                                  setState(() => _selectedRole = role['value']),
+                                  setState(() => _selectedRole = role['value'] as String),
                               child: AnimatedContainer(
                                 duration: const Duration(milliseconds: 200),
                                 margin: const EdgeInsets.symmetric(horizontal: 4),
                                 padding: const EdgeInsets.symmetric(
-                                    vertical: 12, horizontal: 4),
+                                    vertical: 14, horizontal: 4),
                                 decoration: BoxDecoration(
                                   color: selected
                                       ? const Color(0xFF00D4FF).withOpacity(0.15)
@@ -182,9 +183,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                       color: selected
                                           ? const Color(0xFF00D4FF)
                                           : Colors.white38,
-                                      size: 22,
+                                      size: 26,
                                     ),
-                                    const SizedBox(height: 4),
+                                    const SizedBox(height: 6),
                                     Text(
                                       role['label'] as String,
                                       textAlign: TextAlign.center,
@@ -192,7 +193,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                         color: selected
                                             ? const Color(0xFF00D4FF)
                                             : Colors.white54,
-                                        fontSize: 10,
+                                        fontSize: 11,
                                         fontWeight: selected
                                             ? FontWeight.bold
                                             : FontWeight.normal,
@@ -205,43 +206,30 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           );
                         }).toList(),
                       ),
-                      if (_selectedRole == 'admin' || _selectedRole == 'superadmin')
+
+                      // ── Admin approval notice ───────────────────────────
+                      if (_selectedRole == 'admin')
                         Padding(
-                          padding: const EdgeInsets.only(top: 8),
+                          padding: const EdgeInsets.only(top: 10),
                           child: Container(
                             padding: const EdgeInsets.all(10),
                             decoration: BoxDecoration(
-                              color: _selectedRole == 'superadmin'
-                                  ? const Color(0xFFAF52DE).withOpacity(0.1)
-                                  : Colors.amber.withOpacity(0.1),
+                              color: Colors.amber.withOpacity(0.1),
                               borderRadius: BorderRadius.circular(8),
                               border: Border.all(
-                                color: _selectedRole == 'superadmin'
-                                    ? const Color(0xFFAF52DE).withOpacity(0.4)
-                                    : Colors.amber.withOpacity(0.4),
+                                color: Colors.amber.withOpacity(0.4),
                               ),
                             ),
-                            child: Row(
+                            child: const Row(
                               children: [
-                                Icon(
-                                  Icons.info_outline,
-                                  size: 16,
-                                  color: _selectedRole == 'superadmin'
-                                      ? const Color(0xFFAF52DE)
-                                      : Colors.amber,
-                                ),
-                                const SizedBox(width: 8),
+                                Icon(Icons.info_outline,
+                                    size: 16, color: Colors.amber),
+                                SizedBox(width: 8),
                                 Expanded(
                                   child: Text(
-                                    _selectedRole == 'superadmin'
-                                        ? 'Super Admin accounts require approval from the default Super Admin (superadmin)'
-                                        : 'Admin accounts require Super Admin approval before login',
+                                    'Admin accounts require Super Admin approval before login.',
                                     style: TextStyle(
-                                      color: _selectedRole == 'superadmin'
-                                          ? const Color(0xFFAF52DE)
-                                          : Colors.amber,
-                                      fontSize: 12,
-                                    ),
+                                        color: Colors.amber, fontSize: 12),
                                   ),
                                 ),
                               ],
@@ -250,6 +238,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         ),
                       const SizedBox(height: 20),
 
+                      // ── Form fields ─────────────────────────────────────
                       TextFormField(
                         controller: _usernameCtrl,
                         decoration: const InputDecoration(
@@ -288,10 +277,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           labelText: 'Password',
                           prefixIcon: const Icon(Icons.lock_outline),
                           suffixIcon: IconButton(
-                            icon: Icon(
-                                _obscure ? Icons.visibility_off : Icons.visibility),
+                            icon: Icon(_obscure
+                                ? Icons.visibility_off
+                                : Icons.visibility),
                             color: Colors.white54,
-                            onPressed: () => setState(() => _obscure = !_obscure),
+                            onPressed: () =>
+                                setState(() => _obscure = !_obscure),
                           ),
                         ),
                         textInputAction: TextInputAction.next,
@@ -313,12 +304,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         textInputAction: TextInputAction.done,
                         onFieldSubmitted: (_) => _register(),
                         validator: (v) {
-                          if (v != _passwordCtrl.text) return 'Passwords do not match';
+                          if (v != _passwordCtrl.text) {
+                            return 'Passwords do not match';
+                          }
                           return null;
                         },
                       ),
                       const SizedBox(height: 28),
 
+                      // ── Submit button ───────────────────────────────────
                       SizedBox(
                         width: double.infinity,
                         child: ElevatedButton(
@@ -334,7 +328,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         ),
                       ),
 
-                      // Loading message
+                      // ── Loading message ─────────────────────────────────
                       if (_loading) ...[
                         const SizedBox(height: 16),
                         Container(
@@ -350,7 +344,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           child: Row(
                             children: [
                               const SizedBox(
-                                width: 14, height: 14,
+                                width: 14,
+                                height: 14,
                                 child: CircularProgressIndicator(
                                   strokeWidth: 2,
                                   color: Color(0xFF00D4FF),

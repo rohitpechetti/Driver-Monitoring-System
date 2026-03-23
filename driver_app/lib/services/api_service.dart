@@ -8,19 +8,20 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiService {
   // ── Change this to your server IP/hostname ─────────────────────────────────
-  static const String baseUrl = 'https://driver-monitoring-system-nkw7.onrender.com/api';
+  static const String baseUrl =
+      'https://driver-monitoring-system-nkw7.onrender.com/api';
   // Use 10.0.2.2 for Android emulator → localhost
   // Use your machine's IP for physical devices (e.g. http://192.168.1.100:5000/api)
 
   static const Duration _timeout = Duration(seconds: 180);
 
-  // ── Wake server (for Render free tier) ───────────────────────────────────
+  // ── Wake server (for Render free tier) ────────────────────────────────────
   static Future<void> wakeServer() async {
     try {
-      await http.get(Uri.parse('$baseUrl/health')).timeout(const Duration(seconds: 5));
-    } catch (_) {
-      // Ignore errors, we just want to send a request to wake it up
-    }
+      await http
+          .get(Uri.parse('$baseUrl/health'))
+          .timeout(const Duration(seconds: 5));
+    } catch (_) {}
   }
 
   // ── Stored session ─────────────────────────────────────────────────────────
@@ -32,7 +33,7 @@ class ApiService {
 
   static Future<Map<String, dynamic>?> getSession() async {
     final prefs = await SharedPreferences.getInstance();
-    final data = prefs.getString('user');
+    final data  = prefs.getString('user');
     if (data == null) return null;
     return jsonDecode(data);
   }
@@ -72,9 +73,9 @@ class ApiService {
             headers: _headers,
             body: jsonEncode({
               'username': username,
-              'email': email,
+              'email':    email,
               'password': password,
-              'role': role,
+              'role':     role,
             }),
           )
           .timeout(_timeout);
@@ -106,6 +107,75 @@ class ApiService {
     }
   }
 
+  // ── Forgot / Reset Password ────────────────────────────────────────────────
+
+  /// Step 1 — request OTP: POST /api/forgot-password  { email }
+  static Future<Map<String, dynamic>> forgotPassword({
+    required String email,
+  }) async {
+    try {
+      final res = await http
+          .post(
+            Uri.parse('$baseUrl/forgot-password'),
+            headers: _headers,
+            body: jsonEncode({'email': email}),
+          )
+          .timeout(_timeout);
+      return _parse(res);
+    } on SocketException {
+      return {'success': false, 'message': 'Cannot connect to server'};
+    } catch (e) {
+      return {'success': false, 'message': e.toString()};
+    }
+  }
+
+  /// Step 2 — verify OTP only: POST /api/verify-otp  { email, otp }
+  static Future<Map<String, dynamic>> verifyOtp({
+    required String email,
+    required String otp,
+  }) async {
+    try {
+      final res = await http
+          .post(
+            Uri.parse('$baseUrl/verify-otp'),
+            headers: _headers,
+            body: jsonEncode({'email': email, 'otp': otp}),
+          )
+          .timeout(_timeout);
+      return _parse(res);
+    } on SocketException {
+      return {'success': false, 'message': 'Cannot connect to server'};
+    } catch (e) {
+      return {'success': false, 'message': e.toString()};
+    }
+  }
+
+  /// Step 3 — reset password: POST /api/reset-password  { email, otp, new_password }
+  static Future<Map<String, dynamic>> resetPassword({
+    required String email,
+    required String otp,
+    required String newPassword,
+  }) async {
+    try {
+      final res = await http
+          .post(
+            Uri.parse('$baseUrl/reset-password'),
+            headers: _headers,
+            body: jsonEncode({
+              'email':        email,
+              'otp':          otp,
+              'new_password': newPassword,
+            }),
+          )
+          .timeout(_timeout);
+      return _parse(res);
+    } on SocketException {
+      return {'success': false, 'message': 'Cannot connect to server'};
+    } catch (e) {
+      return {'success': false, 'message': e.toString()};
+    }
+  }
+
   // ── Alert Logging ──────────────────────────────────────────────────────────
 
   static Future<Map<String, dynamic>> logAlert({
@@ -116,9 +186,9 @@ class ApiService {
   }) async {
     try {
       final body = {
-        'username': username,
+        'username':   username,
         'alert_type': alertType,
-        'timestamp': timestamp,
+        'timestamp':  timestamp,
         if (screenshotBase64 != null) 'screenshot': screenshotBase64,
       };
       final res = await http
@@ -138,9 +208,11 @@ class ApiService {
 
   static Future<Map<String, dynamic>> getLogs({String? username}) async {
     try {
-      final uri = Uri.parse('$baseUrl/logs')
-          .replace(queryParameters: username != null ? {'username': username} : null);
-      final res = await http.get(uri, headers: _headers).timeout(_timeout);
+      final uri = Uri.parse('$baseUrl/logs').replace(
+          queryParameters:
+              username != null ? {'username': username} : null);
+      final res =
+          await http.get(uri, headers: _headers).timeout(_timeout);
       return _parse(res);
     } catch (e) {
       return {'success': false, 'message': e.toString()};
@@ -149,8 +221,9 @@ class ApiService {
 
   static Future<Map<String, dynamic>> getStats() async {
     try {
-      final res =
-          await http.get(Uri.parse('$baseUrl/stats'), headers: _headers).timeout(_timeout);
+      final res = await http
+          .get(Uri.parse('$baseUrl/stats'), headers: _headers)
+          .timeout(_timeout);
       return _parse(res);
     } catch (e) {
       return {'success': false, 'message': e.toString()};
@@ -174,7 +247,8 @@ class ApiService {
   static Future<Map<String, dynamic>> getPendingAdmins() async {
     try {
       final res = await http
-          .get(Uri.parse('$baseUrl/superadmin/pending-admins'), headers: _headers)
+          .get(Uri.parse('$baseUrl/superadmin/pending-admins'),
+              headers: _headers)
           .timeout(_timeout);
       return _parse(res);
     } catch (e) {
@@ -185,7 +259,8 @@ class ApiService {
   static Future<Map<String, dynamic>> approveAdmin(int userId) async {
     try {
       final res = await http
-          .post(Uri.parse('$baseUrl/superadmin/approve/$userId'), headers: _headers)
+          .post(Uri.parse('$baseUrl/superadmin/approve/$userId'),
+              headers: _headers)
           .timeout(_timeout);
       return _parse(res);
     } catch (e) {
@@ -196,7 +271,8 @@ class ApiService {
   static Future<Map<String, dynamic>> rejectAdmin(int userId) async {
     try {
       final res = await http
-          .delete(Uri.parse('$baseUrl/superadmin/reject/$userId'), headers: _headers)
+          .delete(Uri.parse('$baseUrl/superadmin/reject/$userId'),
+              headers: _headers)
           .timeout(_timeout);
       return _parse(res);
     } catch (e) {
@@ -207,7 +283,8 @@ class ApiService {
   static Future<Map<String, dynamic>> getAllUsers() async {
     try {
       final res = await http
-          .get(Uri.parse('$baseUrl/superadmin/users'), headers: _headers)
+          .get(Uri.parse('$baseUrl/superadmin/users'),
+              headers: _headers)
           .timeout(_timeout);
       return _parse(res);
     } catch (e) {
@@ -218,7 +295,8 @@ class ApiService {
   static Future<Map<String, dynamic>> deleteUser(int userId) async {
     try {
       final res = await http
-          .delete(Uri.parse('$baseUrl/superadmin/delete/$userId'), headers: _headers)
+          .delete(Uri.parse('$baseUrl/superadmin/delete/$userId'),
+              headers: _headers)
           .timeout(_timeout);
       return _parse(res);
     } catch (e) {
