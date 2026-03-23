@@ -5,7 +5,6 @@ Main application entry point with all API endpoints
 
 from flask import Flask, request, jsonify, send_file, Response
 from flask_cors import CORS
-from flask_mail import Mail
 import os
 import csv
 import io
@@ -19,18 +18,8 @@ app = Flask(__name__)
 CORS(app)
 app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  # 10 MB max upload
 
-# ─── Mail Configuration ────────────────────────────────────────────────────────
-app.config['MAIL_SERVER']         = os.environ.get('MAIL_SERVER', 'smtp.gmail.com')
-app.config['MAIL_PORT']           = int(os.environ.get('MAIL_PORT', 465))
-app.config['MAIL_USE_TLS']        = False
-app.config['MAIL_USE_SSL']        = True
-app.config['MAIL_USERNAME']       = os.environ.get('MAIL_USERNAME', 'your_email@gmail.com')
-app.config['MAIL_PASSWORD']       = os.environ.get('MAIL_PASSWORD', 'your_app_password')
-app.config['MAIL_DEFAULT_SENDER'] = os.environ.get('MAIL_DEFAULT_SENDER', os.environ.get('MAIL_USERNAME', 'your_email@gmail.com'))
-
-mail            = Mail(app)
-db              = Database()
-email_service   = EmailService(mail)
+db               = Database()
+email_service    = EmailService()
 detection_engine = DetectionEngine()
 
 SCREENSHOTS_DIR = os.path.join(os.path.dirname(__file__), 'screenshots')
