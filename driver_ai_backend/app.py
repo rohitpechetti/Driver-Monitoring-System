@@ -3,7 +3,7 @@ Driver Monitoring System - Flask Backend
 Main application entry point with all API endpoints
 """
 
-from flask import Flask, request, jsonify, send_file, Response
+'''from flask import Flask, request, jsonify, send_file, Response
 from flask_cors import CORS
 import os
 import csv
@@ -442,8 +442,512 @@ if __name__ == '__main__':
     print("  Driver Monitoring System Backend")
     print("  Running on http://0.0.0.0:5000")
     print("=" * 60)
+    app.run(host='0.0.0.0', port=5000, debug=True)''''
+
+
+
+
+"""
+Driver Monitoring System - Flask Backend
+Main application entry point with all API endpoints
+"""
+
+from flask import Flask, request, jsonify, send_file, Response
+from flask_cors import CORS
+import os
+import csv
+import io
+import json
+from datetime import datetime
+from database import Database
+from email_service import EmailService
+from detection import DetectionEngine
+
+app = Flask(__name__)
+CORS(app)
+app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  # 10 MB max upload
+
+db               = Database()
+email_service    = EmailService()
+detection_engine = DetectionEngine()
+
+SCREENSHOTS_DIR = os.path.join(os.path.dirname(__file__), 'screenshots')
+os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
+
+
+# ─── Authentication Endpoints ──────────────────────────────────────────────────
+
+@app.route('/api/register', methods=['POST'])
+def register():
+    """
+    Register a new user or admin.
+    Super Admin accounts cannot be created via this endpoint —
+    they must be seeded directly in the database.
+    """
+    data = request.get_json()
+    required = ['username', 'email', 'password', 'role']
+    if not all(k in data for k in required):
+        return jsonify({'success': False, 'message': 'Missing required fields'}), 400
+
+    username = data['username'].strip()
+    email    = data['email'].strip().lower()
+    password = data['password']
+    role     = data['role'].lower()
+
+    # Block self-registration as superadmin
+    if role == 'superadmin':
+        return jsonify({
+            'success': False,
+            'message': 'Super Admin accounts cannot be self-registered.'
+        }), 403
+
+    if role not in ['user', 'admin']:
+        return jsonify({'success': False, 'message': 'Invalid role'}), 400
+
+    if db.get_user_by_username(username):
+        return jsonify({'success': False, 'message': 'Username already exists'}), 409
+
+    if db.get_user_by_email(email):
+        return jsonify({'success': False, 'message': 'Email already registered'}), 409
+
+    # Regular users are auto-approved; admins need super-admin approval
+    is_approved = 1 if role == 'user' else 0
+
+    user_id = db.create_user(username, email, password, role, is_approved)
+    if user_id:
+        msg = ('Registration successful'
+               if is_approved
+               else 'Registration submitted. Awaiting Super Admin approval.')
+        # Notify all superadmins about new admin registration
+        if role == 'admin':
+            superadmins = db.get_superadmins()
+            for sa in superadmins:
+                email_service.send_registration_alert_to_superadmin(
+                    sa['email'], username, role
+                )
+        return jsonify({'success': True, 'message': msg, 'user_id': user_id}), 201
+    return jsonify({'success': False, 'message': 'Registration failed'}), 500
+
+
+@app.route('/api/login', methods=['POST'])
+def login():
+    """Authenticate user and return role + approval status."""
+    data = request.get_json()
+    if not data or 'username' not in data or 'password' not in data:
+        return jsonify({'success': False, 'message': 'Missing credentials'}), 400
+
+    user = db.authenticate_user(data['username'], data['password'])
+    if not user:
+        return jsonify({'success': False,
+                        'message': 'Invalid username or password'}), 401
+
+    if not user['is_approved']:
+        return jsonify({'success': False,
+                        'message': 'Account pending approval from Super Admin'}), 403
+
+    return jsonify({
+        'success': True,
+        'message': 'Login successful',
+        'user': {
+            'id':       user['id'],
+            'username': user['username'],
+            'email':    user['email'],
+            'role':     user['role'],
+        }
+    })
+
+
+# ─── Forgot / Reset Password Endpoints ────────────────────────────────────────
+
+@app.route('/api/forgot-password', methods=['POST'])
+def forgot_password():
+    """
+    Step 1 — Request a password-reset OTP.
+    Body: { "email": "user@example.com" }
+    Sends a 6-digit OTP to the registered email (valid 10 min).
+    Always returns success=True to avoid email enumeration.
+    """
+    data  = request.get_json() or {}
+    email = data.get('email', '').strip().lower()
+
+    if not email or '@' not in email:
+        return jsonify({'success': False, 'message': 'Valid email required'}), 400
+
+    user = db.get_user_by_email(email)
+    if user:
+        otp = db.create_otp(email)
+        # Send in a background thread so the response is instant
+        import threading
+        def _send():
+            try:
+                email_service.send_password_reset_otp(
+                    to_email=email,
+                    username=user['username'],
+                    otp=otp,
+                )
+            except Exception as e:
+                print(f"[ForgotPwd] Email thread error: {e}")
+        threading.Thread(target=_send, daemon=True).start()
+    else:
+        print(f"[ForgotPwd] No account found for {email} — silently ignoring")
+
+    # Always return success to avoid leaking which emails are registered
+    return jsonify({
+        'success': True,
+        'message': 'If that email is registered, an OTP has been sent.'
+    })
+
+
+@app.route('/api/verify-otp', methods=['POST'])
+def verify_otp():
+    """
+    Step 2 — Verify OTP without resetting password yet.
+    Body: { "email": "...", "otp": "123456" }
+    """
+    data  = request.get_json() or {}
+    email = data.get('email', '').strip().lower()
+    otp   = data.get('otp', '').strip()
+
+    if not email or not otp:
+        return jsonify({'success': False, 'message': 'Email and OTP required'}), 400
+
+    if db.verify_otp(email, otp):
+        return jsonify({'success': True, 'message': 'OTP verified'})
+
+    return jsonify({'success': False, 'message': 'Invalid or expired OTP'}), 400
+
+
+@app.route('/api/reset-password', methods=['POST'])
+def reset_password():
+    """
+    Step 3 — Reset password using a verified OTP.
+    Body: { "email": "...", "otp": "123456", "new_password": "..." }
+    """
+    data         = request.get_json() or {}
+    email        = data.get('email', '').strip().lower()
+    otp          = data.get('otp', '').strip()
+    new_password = data.get('new_password', '')
+
+    if not email or not otp or not new_password:
+        return jsonify({'success': False,
+                        'message': 'Email, OTP and new password are required'}), 400
+
+    if len(new_password) < 6:
+        return jsonify({'success': False,
+                        'message': 'Password must be at least 6 characters'}), 400
+
+    ok = db.consume_otp_and_reset_password(email, otp, new_password)
+    if ok:
+        return jsonify({'success': True, 'message': 'Password reset successfully'})
+
+    return jsonify({'success': False, 'message': 'Invalid or expired OTP'}), 400
+
+
+# ─── Super Admin Endpoints ─────────────────────────────────────────────────────
+
+@app.route('/api/superadmin/pending-admins', methods=['GET'])
+def get_pending_admins():
+    """Get list of admin registrations awaiting approval."""
+    pending = db.get_pending_admins()
+    return jsonify({'success': True, 'pending': pending})
+
+
+@app.route('/api/superadmin/approve/<int:user_id>', methods=['POST'])
+def approve_admin(user_id):
+    """Approve an admin registration."""
+    result = db.approve_user(user_id)
+    if result:
+        user = db.get_user_by_id(user_id)
+        if user:
+            email_service.send_approval_notification(user['email'], user['username'])
+        return jsonify({'success': True, 'message': 'Admin approved successfully'})
+    return jsonify({'success': False, 'message': 'User not found'}), 404
+
+
+@app.route('/api/superadmin/reject/<int:user_id>', methods=['DELETE'])
+def reject_admin(user_id):
+    """Reject and remove an admin registration."""
+    result = db.delete_user(user_id)
+    if result:
+        return jsonify({'success': True, 'message': 'Admin registration rejected'})
+    return jsonify({'success': False, 'message': 'User not found'}), 404
+
+
+@app.route('/api/superadmin/users', methods=['GET'])
+def get_all_users():
+    """Get all users and admins."""
+    users = db.get_all_users()
+    return jsonify({'success': True, 'users': users})
+
+
+@app.route('/api/superadmin/delete/<int:user_id>', methods=['DELETE'])
+def delete_user(user_id):
+    """Delete a user."""
+    result = db.delete_user(user_id)
+    if result:
+        return jsonify({'success': True, 'message': 'User deleted successfully'})
+    return jsonify({'success': False, 'message': 'User not found'}), 404
+
+
+# ─── Detection & Logging Endpoints ────────────────────────────────────────────
+
+@app.route('/api/log-alert', methods=['POST'])
+def log_alert():
+    """
+    Log a detection alert. Accepts JSON with:
+    - username, alert_type, timestamp
+    - screenshot (base64 encoded image, optional)
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'message': 'No data provided'}), 400
+
+    username       = data.get('username', 'unknown')
+    alert_type     = data.get('alert_type', 'Unknown Alert')
+    timestamp      = data.get('timestamp', datetime.now().isoformat())
+    screenshot_b64 = data.get('screenshot')
+
+    print(f"[Alert] Received: {alert_type} from {username}, "
+          f"screenshot: {'YES' if screenshot_b64 else 'NO'}")
+
+    screenshot_path = None
+    if screenshot_b64:
+        screenshot_path = save_screenshot(screenshot_b64, username, timestamp)
+
+    log_id = db.create_log(username, alert_type, timestamp, screenshot_path)
+
+    # Send email alerts in background thread
+    import threading
+    def send_emails():
+        try:
+            admins     = db.get_approved_admins()
+            superadmins = db.get_superadmins()
+            recipients  = admins + superadmins
+            print(f"[Alert] Sending emails to {len(recipients)} recipients for: {alert_type}")
+            for user in recipients:
+                email_service.send_alert_email(
+                    to_email=user['email'],
+                    driver_name=username,
+                    alert_type=alert_type,
+                    timestamp=timestamp,
+                    screenshot_path=screenshot_path,
+                )
+        except Exception as e:
+            print(f"[Alert] Email thread error: {e}")
+
+    threading.Thread(target=send_emails, daemon=True).start()
+
+    return jsonify({
+        'success': True,
+        'message': 'Alert logged successfully',
+        'log_id': log_id,
+    })
+
+
+def save_screenshot(b64_data: str, username: str, timestamp: str) -> str:
+    """Decode and save base64 screenshot to disk."""
+    import base64
+    try:
+        clean    = b64_data.split(',')[-1]
+        img_data = base64.b64decode(clean)
+        print(f"[Screenshot] Decoded size: {len(img_data)} bytes")
+        safe_ts  = timestamp.replace(':', '-').replace('.', '-')
+        filename = f"{username}_{safe_ts}.jpg"
+        filepath = os.path.join(SCREENSHOTS_DIR, filename)
+        with open(filepath, 'wb') as f:
+            f.write(img_data)
+        print(f"[Screenshot] Saved to: {filepath}")
+        return filepath
+    except Exception as e:
+        print(f"[Screenshot] Save error: {e}")
+        return None
+
+
+# ─── Reports & Logs Endpoints ──────────────────────────────────────────────────
+
+@app.route('/api/logs', methods=['GET'])
+def get_logs():
+    """Fetch all driver logs, optionally filtered by username."""
+    username_filter = request.args.get('username')
+    logs = db.get_logs(username_filter)
+    return jsonify({'success': True, 'logs': logs})
+
+
+@app.route('/api/reports/csv', methods=['GET'])
+def download_csv():
+    """Download driver logs as CSV."""
+    username_filter = request.args.get('username')
+    logs = db.get_logs(username_filter)
+
+    output = io.StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=['id', 'username', 'status', 'timestamp', 'screenshot_path'],
+    )
+    writer.writeheader()
+    writer.writerows(logs)
+    output.seek(0)
+
+    return send_file(
+        io.BytesIO(output.getvalue().encode()),
+        mimetype='text/csv',
+        as_attachment=True,
+        download_name=f'driver_logs_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv',
+    )
+
+
+@app.route('/api/reports/pdf', methods=['GET'])
+def download_pdf():
+    """Download driver logs as PDF using reportlab."""
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib import colors
+        from reportlab.platypus import (SimpleDocTemplate, Table,
+                                        TableStyle, Paragraph, Spacer)
+        from reportlab.lib.styles import getSampleStyleSheet
+
+        username_filter = request.args.get('username')
+        logs = db.get_logs(username_filter)
+
+        buffer = io.BytesIO()
+        doc    = SimpleDocTemplate(buffer, pagesize=A4)
+        styles = getSampleStyleSheet()
+        elements = []
+
+        elements.append(Paragraph(
+            'Driver Monitoring System - Incident Report', styles['Title']))
+        elements.append(Paragraph(
+            f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}',
+            styles['Normal']))
+        elements.append(Spacer(1, 20))
+
+        table_data = [['ID', 'Driver', 'Alert Type', 'Timestamp']]
+        for log in logs:
+            table_data.append([
+                str(log.get('id', '')),
+                log.get('username', ''),
+                log.get('status', ''),
+                log.get('timestamp', ''),
+            ])
+
+        table = Table(table_data, colWidths=[40, 120, 180, 160])
+        table.setStyle(TableStyle([
+            ('BACKGROUND',   (0, 0), (-1, 0),  colors.HexColor('#1a1a2e')),
+            ('TEXTCOLOR',    (0, 0), (-1, 0),  colors.white),
+            ('FONTNAME',     (0, 0), (-1, 0),  'Helvetica-Bold'),
+            ('FONTSIZE',     (0, 0), (-1, 0),  11),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1),
+             [colors.white, colors.HexColor('#f0f0f0')]),
+            ('GRID',         (0, 0), (-1, -1), 0.5, colors.grey),
+            ('ALIGN',        (0, 0), (-1, -1), 'CENTER'),
+            ('VALIGN',       (0, 0), (-1, -1), 'MIDDLE'),
+            ('TOPPADDING',   (0, 0), (-1, -1), 6),
+            ('BOTTOMPADDING',(0, 0), (-1, -1), 6),
+        ]))
+        elements.append(table)
+        doc.build(elements)
+        buffer.seek(0)
+
+        return send_file(
+            buffer,
+            mimetype='application/pdf',
+            as_attachment=True,
+            download_name=f'driver_report_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf',
+        )
+    except ImportError:
+        return jsonify({
+            'success': False,
+            'message': 'reportlab not installed. Run: pip install reportlab',
+        }), 500
+
+
+@app.route('/api/stats', methods=['GET'])
+def get_stats():
+    """Get summary statistics for admin dashboard."""
+    stats = db.get_stats()
+    return jsonify({'success': True, 'stats': stats})
+
+
+# ─── Screenshot Serving ────────────────────────────────────────────────────────
+
+@app.route('/api/screenshot/<path:filename>', methods=['GET'])
+def serve_screenshot(filename):
+    filepath = os.path.join(SCREENSHOTS_DIR, filename)
+    if os.path.exists(filepath):
+        return send_file(filepath, mimetype='image/jpeg')
+    return jsonify({'error': 'Screenshot not found'}), 404
+
+
+
+
+# ─── Email Diagnostic Endpoint ─────────────────────────────────────────────────
+
+@app.route('/api/test-email', methods=['GET'])
+def test_email():
+    """Diagnostic endpoint - remove after fixing email issue."""
+    import smtplib, os, traceback
+    result = {}
+
+    # Step 1: Check env vars
+    username = os.environ.get('MAIL_USERNAME', '')
+    password = os.environ.get('MAIL_PASSWORD', '')
+    server   = os.environ.get('MAIL_SERVER', 'smtp.gmail.com')
+    port     = int(os.environ.get('MAIL_PORT', 465))
+
+    result['env_vars'] = {
+        'MAIL_USERNAME':       username if username else 'NOT SET',
+        'MAIL_PASSWORD':       'SET (hidden)' if password else 'NOT SET',
+        'MAIL_SERVER':         server,
+        'MAIL_PORT':           port,
+        'MAIL_DEFAULT_SENDER': os.environ.get('MAIL_DEFAULT_SENDER', 'NOT SET'),
+    }
+
+    if not username or not password:
+        result['error'] = 'Missing MAIL_USERNAME or MAIL_PASSWORD env vars'
+        return jsonify(result), 500
+
+    # Step 2: Try SMTP connection
+    try:
+        result['step'] = 'Connecting to SMTP server...'
+        with smtplib.SMTP_SSL(server, port, timeout=10) as s:
+            result['step'] = 'Connected. Logging in...'
+            s.login(username, password)
+            result['step'] = 'Logged in. Sending test email...'
+            from email.mime.text import MIMEText
+            msg = MIMEText('This is a test email from Driver Monitoring System.')
+            msg['Subject'] = '[DMS] Test Email'
+            msg['From']    = username
+            msg['To']      = username
+            s.sendmail(username, username, msg.as_string())
+            result['success'] = True
+            result['message'] = f'Test email sent to {username} successfully!'
+    except smtplib.SMTPAuthenticationError as e:
+        result['error'] = f'Authentication failed: {str(e)}'
+        result['fix']   = 'Your Gmail App Password is wrong or expired. Generate a new one.'
+    except smtplib.SMTPConnectError as e:
+        result['error'] = f'Cannot connect to {server}:{port} - {str(e)}'
+        result['fix']   = 'Render may be blocking this port. Try port 587 with TLS instead.'
+    except OSError as e:
+        result['error'] = f'Network error: {str(e)}'
+        result['fix']   = 'Render is blocking outbound SMTP connections on this plan.'
+    except Exception as e:
+        result['error'] = f'{type(e).__name__}: {str(e)}'
+        result['trace'] = traceback.format_exc()
+
+    status = 200 if result.get('success') else 500
+    return jsonify(result), status
+
+# ─── Health Check ──────────────────────────────────────────────────────────────
+
+@app.route('/api/health', methods=['GET'])
+def health():
+    return jsonify({'status': 'ok', 'timestamp': datetime.now().isoformat()})
+
+
+if __name__ == '__main__':
+    db.init_db()
+    print("=" * 60)
+    print("  Driver Monitoring System Backend")
+    print("  Running on http://0.0.0.0:5000")
+    print("=" * 60)
     app.run(host='0.0.0.0', port=5000, debug=True)
-
-
-
-
