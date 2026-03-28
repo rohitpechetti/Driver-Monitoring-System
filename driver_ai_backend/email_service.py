@@ -4,7 +4,7 @@ and OTP emails for password reset.
 Uses smtplib directly (more reliable than Flask-Mail on Render).
 """
 
-import os
+'''import os
 import smtplib
 import traceback
 from email.mime.multipart import MIMEMultipart
@@ -203,6 +203,226 @@ class EmailService:
             msg.attach(MIMEText(text_body, 'plain'))
             msg.attach(MIMEText(html_body, 'html'))
             _send(msg)
+
+        except Exception as e:
+            print(f"[Email] Failed to send OTP to {to_email}: {e}")
+            traceback.print_exc()'''
+
+"""
+Email Service - Sends emails via SendGrid API.
+Works on Render free tier (uses HTTPS, not blocked SMTP).
+"""
+
+import os
+import base64
+import traceback
+from typing import Optional
+
+try:
+    from sendgrid import SendGridAPIClient
+    from sendgrid.helpers.mail import (
+        Mail, Attachment, FileContent, FileName,
+        FileType, Disposition, ContentId
+    )
+    SENDGRID_AVAILABLE = True
+except ImportError:
+    SENDGRID_AVAILABLE = False
+    print("[Email] sendgrid package not installed. Run: pip install sendgrid")
+
+
+def _get_config():
+    return {
+        'api_key':   os.environ.get('SENDGRID_API_KEY', ''),
+        'sender':    os.environ.get('MAIL_DEFAULT_SENDER',
+                     os.environ.get('MAIL_USERNAME', '')),
+    }
+
+
+def _is_configured() -> bool:
+    cfg = _get_config()
+    if not SENDGRID_AVAILABLE:
+        print("[Email] sendgrid not installed")
+        return False
+    if not cfg['api_key'] or not cfg['api_key'].startswith('SG.'):
+        print("[Email] SENDGRID_API_KEY not set or invalid in environment")
+        return False
+    if not cfg['sender']:
+        print("[Email] MAIL_DEFAULT_SENDER not set in environment")
+        return False
+    return True
+
+
+def _send(message: 'Mail'):
+    """Send via SendGrid API."""
+    cfg = _get_config()
+    sg = SendGridAPIClient(cfg['api_key'])
+    response = sg.send(message)
+    print(f"[Email] SendGrid response: {response.status_code}")
+    return response
+
+
+class EmailService:
+    def __init__(self, mail=None):
+        # mail param kept for backward compatibility
+        pass
+
+    # ── Driver alert email ────────────────────────────────────────────────────
+
+    def send_alert_email(
+        self,
+        to_email: str,
+        driver_name: str,
+        alert_type: str,
+        timestamp: str,
+        screenshot_path: Optional[str] = None,
+    ):
+        if not _is_configured():
+            print(f"[Email] Skipping alert email to {to_email} - not configured")
+            return
+
+        try:
+            cfg = _get_config()
+            html_body = f"""
+<h2>&#128680; Driver Monitoring Alert</h2>
+<p><b>Driver:</b> {driver_name}</p>
+<p><b>Alert:</b> {alert_type}</p>
+<p><b>Time:</b> {timestamp}</p>
+<p>Please review the situation immediately.</p>
+"""
+            text_body = (
+                f"Driver Monitoring System - Incident Alert\n\n"
+                f"Driver: {driver_name}\nAlert: {alert_type}\nTime: {timestamp}\n"
+                f"Please review immediately."
+            )
+
+            message = Mail(
+                from_email=cfg['sender'],
+                to_emails=to_email,
+                subject=f"[DMS Alert] {alert_type} - Driver: {driver_name}",
+                plain_text_content=text_body,
+                html_content=html_body,
+            )
+
+            # Attach screenshot if available
+            if screenshot_path and os.path.exists(screenshot_path):
+                with open(screenshot_path, 'rb') as f:
+                    img_data = f.read()
+                encoded = base64.b64encode(img_data).decode()
+                attachment = Attachment(
+                    FileContent(encoded),
+                    FileName('driver_snapshot.jpg'),
+                    FileType('image/jpeg'),
+                    Disposition('attachment'),
+                )
+                message.attachment = attachment
+                print(f"[Email] Screenshot attached: {screenshot_path}")
+            else:
+                print("[Email] No screenshot attached")
+
+            _send(message)
+            print(f"[Email] Alert sent to {to_email}: {alert_type}")
+
+        except Exception as e:
+            print(f"[Email] Failed to send alert to {to_email}: {e}")
+            traceback.print_exc()
+
+    # ── Admin approval notification ───────────────────────────────────────────
+
+    def send_approval_notification(self, to_email: str, username: str):
+        if not _is_configured():
+            return
+        try:
+            cfg = _get_config()
+            message = Mail(
+                from_email=cfg['sender'],
+                to_emails=to_email,
+                subject="[DMS] Your Account Has Been Approved",
+                plain_text_content=(
+                    f"Hello {username},\n\n"
+                    "Your account on the Driver Monitoring System has been approved.\n"
+                    "You can now log in and access the system.\n\n"
+                    "— Driver Monitoring System"
+                ),
+            )
+            _send(message)
+            print(f"[Email] Approval notification sent to {to_email}")
+
+        except Exception as e:
+            print(f"[Email] Failed to send approval notification: {e}")
+            traceback.print_exc()
+
+    # ── New admin registration alert ──────────────────────────────────────────
+
+    def send_registration_alert_to_superadmin(
+        self, superadmin_email: str, new_username: str, role: str
+    ):
+        if not _is_configured():
+            return
+        try:
+            cfg = _get_config()
+            message = Mail(
+                from_email=cfg['sender'],
+                to_emails=superadmin_email,
+                subject=f"[DMS] New {role} registration: {new_username}",
+                plain_text_content=(
+                    f"Driver Monitoring System - New Registration\n\n"
+                    f"A new {role} account is pending your approval:\n\n"
+                    f"Username : {new_username}\nRole     : {role}\n\n"
+                    "Please log in to the Super Admin panel to approve or reject.\n\n"
+                    "— Driver Monitoring System"
+                ),
+            )
+            _send(message)
+            print(f"[Email] Registration alert sent to {superadmin_email}")
+
+        except Exception as e:
+            print(f"[Email] Failed to send registration alert: {e}")
+            traceback.print_exc()
+
+    # ── Password reset OTP ────────────────────────────────────────────────────
+
+    def send_password_reset_otp(self, to_email: str, username: str, otp: str):
+        if not _is_configured():
+            print(f"[Email] Skipping OTP email to {to_email} - not configured")
+            return
+
+        try:
+            cfg = _get_config()
+            html_body = f"""
+<div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;">
+  <h2 style="color:#0A1628;">&#128272; Password Reset</h2>
+  <p>Hello <b>{username}</b>,</p>
+  <p>Use the OTP below to reset your Driver Monitoring System password:</p>
+  <div style="
+    font-size:36px;font-weight:bold;letter-spacing:12px;
+    text-align:center;padding:20px;margin:24px 0;
+    background:#f0f8ff;border:2px solid #00D4FF;
+    border-radius:12px;color:#0A1628;">
+    {otp}
+  </div>
+  <p style="color:#666;">This OTP expires in <b>10 minutes</b>.</p>
+  <p style="color:#666;">If you did not request this, ignore this email.</p>
+  <hr style="border:none;border-top:1px solid #eee;margin:24px 0;">
+  <p style="color:#999;font-size:12px;">— Driver Monitoring System</p>
+</div>
+"""
+            text_body = (
+                f"Driver Monitoring System - Password Reset\n\n"
+                f"Hello {username},\n\n"
+                f"Your OTP: {otp}\n\n"
+                "Valid for 10 minutes. Ignore if you didn't request this.\n\n"
+                "— Driver Monitoring System"
+            )
+
+            message = Mail(
+                from_email=cfg['sender'],
+                to_emails=to_email,
+                subject="[DMS] Password Reset OTP",
+                plain_text_content=text_body,
+                html_content=html_body,
+            )
+            _send(message)
+            print(f"[Email] OTP sent to {to_email}")
 
         except Exception as e:
             print(f"[Email] Failed to send OTP to {to_email}: {e}")

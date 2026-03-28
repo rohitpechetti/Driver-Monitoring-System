@@ -452,6 +452,7 @@ Driver Monitoring System - Flask Backend
 Main application entry point with all API endpoints
 """
 
+
 from flask import Flask, request, jsonify, send_file, Response
 from flask_cors import CORS
 import os
@@ -936,6 +937,21 @@ def test_email():
 
     status = 200 if result.get('success') else 500
     return jsonify(result), status
+
+
+# ─── SendGrid Test Endpoint (remove after confirming email works) ──────────────
+
+@app.route('/api/test-email', methods=['GET'])
+def test_email():
+    try:
+        email_service.send_password_reset_otp(
+            to_email=os.environ.get('MAIL_USERNAME', ''),
+            username='test_user',
+            otp='123456',
+        )
+        return jsonify({'success': True, 'message': 'Test OTP email sent! Check your inbox.'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 # ─── Health Check ──────────────────────────────────────────────────────────────
 
