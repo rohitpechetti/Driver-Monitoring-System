@@ -452,7 +452,6 @@ Driver Monitoring System - Flask Backend
 Main application entry point with all API endpoints
 """
 
-
 from flask import Flask, request, jsonify, send_file, Response
 from flask_cors import CORS
 import os
@@ -879,64 +878,6 @@ def serve_screenshot(filename):
     return jsonify({'error': 'Screenshot not found'}), 404
 
 
-
-
-# ─── Email Diagnostic Endpoint ─────────────────────────────────────────────────
-
-@app.route('/api/test-email', methods=['GET'])
-def test_email():
-    """Diagnostic endpoint - remove after fixing email issue."""
-    import smtplib, os, traceback
-    result = {}
-
-    # Step 1: Check env vars
-    username = os.environ.get('MAIL_USERNAME', '')
-    password = os.environ.get('MAIL_PASSWORD', '')
-    server   = os.environ.get('MAIL_SERVER', 'smtp.gmail.com')
-    port     = int(os.environ.get('MAIL_PORT', 465))
-
-    result['env_vars'] = {
-        'MAIL_USERNAME':       username if username else 'NOT SET',
-        'MAIL_PASSWORD':       'SET (hidden)' if password else 'NOT SET',
-        'MAIL_SERVER':         server,
-        'MAIL_PORT':           port,
-        'MAIL_DEFAULT_SENDER': os.environ.get('MAIL_DEFAULT_SENDER', 'NOT SET'),
-    }
-
-    if not username or not password:
-        result['error'] = 'Missing MAIL_USERNAME or MAIL_PASSWORD env vars'
-        return jsonify(result), 500
-
-    # Step 2: Try SMTP connection
-    try:
-        result['step'] = 'Connecting to SMTP server...'
-        with smtplib.SMTP_SSL(server, port, timeout=10) as s:
-            result['step'] = 'Connected. Logging in...'
-            s.login(username, password)
-            result['step'] = 'Logged in. Sending test email...'
-            from email.mime.text import MIMEText
-            msg = MIMEText('This is a test email from Driver Monitoring System.')
-            msg['Subject'] = '[DMS] Test Email'
-            msg['From']    = username
-            msg['To']      = username
-            s.sendmail(username, username, msg.as_string())
-            result['success'] = True
-            result['message'] = f'Test email sent to {username} successfully!'
-    except smtplib.SMTPAuthenticationError as e:
-        result['error'] = f'Authentication failed: {str(e)}'
-        result['fix']   = 'Your Gmail App Password is wrong or expired. Generate a new one.'
-    except smtplib.SMTPConnectError as e:
-        result['error'] = f'Cannot connect to {server}:{port} - {str(e)}'
-        result['fix']   = 'Render may be blocking this port. Try port 587 with TLS instead.'
-    except OSError as e:
-        result['error'] = f'Network error: {str(e)}'
-        result['fix']   = 'Render is blocking outbound SMTP connections on this plan.'
-    except Exception as e:
-        result['error'] = f'{type(e).__name__}: {str(e)}'
-        result['trace'] = traceback.format_exc()
-
-    status = 200 if result.get('success') else 500
-    return jsonify(result), status
 
 
 # ─── SendGrid Test Endpoint (remove after confirming email works) ──────────────
