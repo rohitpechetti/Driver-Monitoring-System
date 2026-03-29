@@ -68,7 +68,7 @@ class Database:
                 conn.execute(
                     "INSERT INTO users (username, email, password, role, is_approved, created_at) "
                     "VALUES (?, ?, ?, 'superadmin', 1, ?)",
-                    ('superadmin', 'superadmin@dms.local', _hash_password('superadmin123'),
+                    ('Rohit', 'rohitpechetti03@gmail.com', _hash_password('Rohit@456'),
                      datetime.now().isoformat())
                 )
                 conn.commit()
