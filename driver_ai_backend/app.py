@@ -452,8 +452,11 @@ Driver Monitoring System - Flask Backend
 Main application entry point with all API endpoints
 """
 
+
+
 from flask import Flask, request, jsonify, send_file, Response
 from flask_cors import CORS
+from flask_mail import Mail
 import os
 import csv
 import io
@@ -467,8 +470,17 @@ app = Flask(__name__)
 CORS(app)
 app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  # 10 MB max upload
 
-db               = Database()
-email_service    = EmailService()
+# ─── Mail Configuration ────────────────────────────────────────────────────────
+app.config['MAIL_SERVER']         = os.environ.get('MAIL_SERVER', 'smtp.gmail.com')
+app.config['MAIL_PORT']           = int(os.environ.get('MAIL_PORT', 587))
+app.config['MAIL_USE_TLS']        = True
+app.config['MAIL_USERNAME']       = os.environ.get('MAIL_USERNAME', 'your_email@gmail.com')
+app.config['MAIL_PASSWORD']       = os.environ.get('MAIL_PASSWORD', 'your_app_password')
+app.config['MAIL_DEFAULT_SENDER'] = os.environ.get('MAIL_USERNAME', 'your_email@gmail.com')
+
+mail            = Mail(app)
+db              = Database()
+email_service   = EmailService(mail)
 detection_engine = DetectionEngine()
 
 SCREENSHOTS_DIR = os.path.join(os.path.dirname(__file__), 'screenshots')
@@ -720,11 +732,17 @@ def log_alert():
     import threading
     def send_emails():
         try:
-            admins     = db.get_approved_admins()
+            admins      = db.get_approved_admins()
             superadmins = db.get_superadmins()
             recipients  = admins + superadmins
-            print(f"[Alert] Sending emails to {len(recipients)} recipients for: {alert_type}")
+            print(f"[Alert] Approved admins in DB: {admins}")
+            print(f"[Alert] Superadmins in DB: {superadmins}")
+            print(f"[Alert] Total recipients: {len(recipients)}")
+            if not recipients:
+                print("[Alert] NO RECIPIENTS - no approved admins in DB!")
+                return
             for user in recipients:
+                print(f"[Alert] Sending to: {user['email']}")
                 email_service.send_alert_email(
                     to_email=user['email'],
                     driver_name=username,
@@ -733,7 +751,9 @@ def log_alert():
                     screenshot_path=screenshot_path,
                 )
         except Exception as e:
+            import traceback
             print(f"[Alert] Email thread error: {e}")
+            traceback.print_exc()
 
     threading.Thread(target=send_emails, daemon=True).start()
 
@@ -877,22 +897,6 @@ def serve_screenshot(filename):
         return send_file(filepath, mimetype='image/jpeg')
     return jsonify({'error': 'Screenshot not found'}), 404
 
-
-
-
-# ─── SendGrid Test Endpoint (remove after confirming email works) ──────────────
-
-@app.route('/api/test-email', methods=['GET'])
-def test_email():
-    try:
-        email_service.send_password_reset_otp(
-            to_email=os.environ.get('MAIL_USERNAME', ''),
-            username='test_user',
-            otp='123456',
-        )
-        return jsonify({'success': True, 'message': 'Test OTP email sent! Check your inbox.'})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
 
 # ─── Health Check ──────────────────────────────────────────────────────────────
 
