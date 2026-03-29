@@ -1,0 +1,8 @@
+venv/
+__pycache__/
+*.pyc
+*.db
+screenshots/
+.env
+models/yolov8n.pt
+models/face_landmarker.task
