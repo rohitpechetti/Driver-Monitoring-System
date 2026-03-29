@@ -1,10 +1,7 @@
-
 """
 Driver Monitoring System - Flask Backend
 Main application entry point with all API endpoints
 """
-
-
 
 from flask import Flask, request, jsonify, send_file, Response
 from flask_cors import CORS
@@ -280,21 +277,21 @@ def log_alert():
 
     log_id = db.create_log(username, alert_type, timestamp, screenshot_path)
 
-    # Send email alerts in background thread
-    import threading
-    def send_emails():
-        try:
-            admins      = db.get_approved_admins()
-            superadmins = db.get_superadmins()
-            recipients  = admins + superadmins
-            print(f"[Alert] Approved admins in DB: {admins}")
-            print(f"[Alert] Superadmins in DB: {superadmins}")
-            print(f"[Alert] Total recipients: {len(recipients)}")
-            if not recipients:
-                print("[Alert] NO RECIPIENTS - no approved admins in DB!")
-                return
+    # Send email alerts directly (not in background thread for debugging)
+    import sys
+    try:
+        admins      = db.get_approved_admins()
+        superadmins = db.get_superadmins()
+        recipients  = admins + superadmins
+        print(f"[Alert] Approved admins: {admins}", flush=True)
+        print(f"[Alert] Superadmins: {superadmins}", flush=True)
+        print(f"[Alert] Total recipients: {len(recipients)}", flush=True)
+        sys.stdout.flush()
+        if not recipients:
+            print("[Alert] NO RECIPIENTS - no approved admins in DB!", flush=True)
+        else:
             for user in recipients:
-                print(f"[Alert] Sending to: {user['email']}")
+                print(f"[Alert] Sending to: {user['email']}", flush=True)
                 email_service.send_alert_email(
                     to_email=user['email'],
                     driver_name=username,
@@ -302,12 +299,10 @@ def log_alert():
                     timestamp=timestamp,
                     screenshot_path=screenshot_path,
                 )
-        except Exception as e:
-            import traceback
-            print(f"[Alert] Email thread error: {e}")
-            traceback.print_exc()
-
-    threading.Thread(target=send_emails, daemon=True).start()
+    except Exception as e:
+        import traceback
+        print(f"[Alert] Email error: {e}", flush=True)
+        traceback.print_exc()
 
     return jsonify({
         'success': True,
