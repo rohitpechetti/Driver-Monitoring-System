@@ -32,7 +32,7 @@ class DriverMonitorApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Driver Monitor',
+      title: 'Safe Wheel',
       debugShowCheckedModeBanner: false,
       theme: _buildTheme(),
       home: const SplashScreen(),
@@ -177,11 +177,14 @@ class _SplashScreenState extends State<SplashScreen>
                     ),
                   ],
                 ),
-                child: const Icon(Icons.remove_red_eye,
-                    size: 50, color: Colors.white),
+                child: Image.asset(
+                  'assets/logo.png',
+                  width:80,
+                  height: 80,
+                ),
               ),
               const SizedBox(height: 24),
-              const Text('DRIVER MONITOR',
+              const Text('SAFE WHEEL',
                   style: TextStyle(
                       fontSize: 28,
                       fontWeight: FontWeight.w900,
